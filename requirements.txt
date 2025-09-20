@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langgraph
+sqlalchemy
+sqlalchemy-timescaledb
+psycopg2-binary
+garminconnect
+fit-tool
+celery
+python-telegram-bot
