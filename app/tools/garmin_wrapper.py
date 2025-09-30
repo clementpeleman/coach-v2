@@ -1,4 +1,5 @@
 import logging
+import datetime
 from garminconnect import Garmin
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +33,36 @@ class GarminWrapper:
         except Exception as e:
             logger.error(f"Failed to fetch activities: {e}")
             return []
+
+    def get_sleep_data(self, date):
+        """Fetch sleep data for a specific date."""
+        try:
+            sleep_data = self.client.get_sleep_data(date.isoformat())
+            logger.info(f"Fetched sleep data for {date}.")
+            return sleep_data
+        except Exception as e:
+            logger.error(f"Failed to fetch sleep data: {e}")
+            return None
+
+    def get_stress_data(self, date):
+        """Fetch stress data for a specific date."""
+        try:
+            stress_data = self.client.get_stress_data(date.isoformat())
+            logger.info(f"Fetched stress data for {date}.")
+            return stress_data
+        except Exception as e:
+            logger.error(f"Failed to fetch stress data: {e}")
+            return None
+
+    def get_full_name(self):
+        """Fetch user's full name."""
+        try:
+            full_name = self.client.get_full_name()
+            logger.info(f"Fetched full name: {full_name}.")
+            return full_name
+        except Exception as e:
+            logger.error(f"Failed to fetch full name: {e}")
+            return None
 
     def logout(self):
         """Log out from Garmin Connect."""
