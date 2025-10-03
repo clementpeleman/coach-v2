@@ -12,3 +12,5 @@ celery
 python-telegram-bot
 python-dotenv
 alembic
+cryptography
+pydantic-settings

@@ -1,5 +1,7 @@
 # Ignore environment variables file
 .env
+.env.local
+.env.docker.backup
 
 # Python cache
 __pycache__/
@@ -11,3 +13,9 @@ __pycache__/
 
 # Docker data
 pgdata/
+example/
+
+# Bot runtime files
+bot.log
+.bot.pid
+*.log

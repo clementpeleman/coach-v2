@@ -21,7 +21,6 @@ class UserSummaryBase(BaseModel):
     activity_frequency: Optional[float] = None
     typical_activity_duration: Optional[float] = None
     typical_activity_distance: Optional[float] = None
-    last_updated: Optional[datetime.datetime] = None
 
 class UserSummaryCreate(UserSummaryBase):
     pass

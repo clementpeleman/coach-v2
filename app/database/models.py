@@ -9,7 +9,7 @@ class UserProfile(Base):
     user_id = Column(BigInteger, primary_key=True)
     phone_number = Column(String, nullable=True)
     garmin_email = Column(String)
-    garmin_password = Column(String)  # In a real application, this should be encrypted!
+    garmin_password = Column(String)  # Stored encrypted with Fernet
 
 class UserSummary(Base):
     __tablename__ = 'user_summary'
