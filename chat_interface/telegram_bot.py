@@ -438,7 +438,7 @@ async def conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             logger.debug(f"OAuth check failed: {e}")
 
     if not is_logged_in:
-        await update.message.reply_text("Gelieve eerst in te loggen met het /login commando of /garmin_connect voor OAuth.")
+        await update.message.reply_text("Gelieve eerst in te loggen met /garmin_connect.")
         return
     message = update.message.text
 
