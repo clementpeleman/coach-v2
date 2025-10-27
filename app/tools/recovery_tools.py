@@ -1,6 +1,6 @@
 """Recovery assessment tools for intelligent workout planning."""
 import datetime
-from app.tools.garmin_tools import get_sleep_data, get_stress_data
+from app.tools.garmin_tools import get_health_data
 
 
 def assess_recovery_status(user_id: int) -> str:
@@ -13,39 +13,37 @@ def assess_recovery_status(user_id: int) -> str:
     Returns a comprehensive recovery assessment with recommendations.
     """
     try:
-        # Get yesterday's date
-        yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        # Get yesterday's date (using today's date if no data for yesterday yet)
+        today = datetime.date.today()
+        yesterday = (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
         # Fetch sleep and stress data
-        sleep_summary = get_sleep_data(user_id, yesterday)
-        stress_summary = get_stress_data(user_id, yesterday)
+        health_data = get_health_data(user_id, data_types=['sleeps', 'stress'], start_date=yesterday)
 
         # Build comprehensive assessment
         assessment = f"Recovery Assessment (based on {yesterday}):\n\n"
-        assessment += "=== Sleep Analysis ===\n"
-        assessment += sleep_summary + "\n\n"
-        assessment += "=== Stress Analysis ===\n"
-        assessment += stress_summary + "\n\n"
+        assessment += health_data + "\n\n"
 
-        # Parse sleep data for basic assessment
+        # Parse health data for recovery score
         recovery_score = 0
         notes = []
 
         # Simple heuristics for recovery assessment
-        if "Error" not in sleep_summary:
-            if "7" in sleep_summary or "8" in sleep_summary or "9" in sleep_summary:
+        if "Error" not in health_data:
+            # Check sleep duration
+            if " 7" in health_data or " 8" in health_data or " 9" in health_data:
                 recovery_score += 2
                 notes.append("✓ Good sleep duration")
-            elif "6" in sleep_summary:
+            elif " 6" in health_data:
                 recovery_score += 1
                 notes.append("⚠ Moderate sleep duration")
-            else:
+            elif "Total sleep:" in health_data:
                 notes.append("⚠ Insufficient sleep duration")
 
             # Check for sleep score if available
-            if "sleep score:" in sleep_summary.lower():
-                score_part = sleep_summary.lower().split("sleep score:")[1].strip()
+            if "sleep score:" in health_data.lower():
                 try:
+                    score_part = health_data.lower().split("sleep score:")[1].strip()
                     score = int(score_part.split("/")[0].strip())
                     if score >= 80:
                         recovery_score += 2
@@ -58,11 +56,10 @@ def assess_recovery_status(user_id: int) -> str:
                 except:
                     pass
 
-        # Parse stress data
-        if "Error" not in stress_summary:
-            if "average stress level:" in stress_summary.lower():
+            # Check stress data
+            if "average stress:" in health_data.lower():
                 try:
-                    avg_stress_part = stress_summary.lower().split("average stress level:")[1].strip()
+                    avg_stress_part = health_data.lower().split("average stress:")[1].strip()
                     avg_stress = int(avg_stress_part.split("\n")[0].strip())
                     if avg_stress < 30:
                         recovery_score += 2
@@ -110,14 +107,13 @@ def get_recovery_metrics(user_id: int, date: str = None) -> str:
     """
     try:
         if not date:
-            date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            today = datetime.date.today()
+            date = (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
-        sleep_summary = get_sleep_data(user_id, date)
-        stress_summary = get_stress_data(user_id, date)
+        health_data = get_health_data(user_id, data_types=['sleeps', 'stress'], start_date=date)
 
         result = f"Recovery Metrics for {date}:\n\n"
-        result += sleep_summary + "\n\n"
-        result += stress_summary
+        result += health_data
 
         return result
 

@@ -54,7 +54,7 @@ def analyze_and_summarize_user_activities(user_id: int) -> str:
         typical_activity_distance = (total_distance / len(activities_with_distance)) / 1000 if activities_with_distance else 0 # In kilometers
 
         summary_str += (
-            f"\n**{activity_type.replace('_', ' ').title()}**\n"
+            f"\n{activity_type.replace('_', ' ').title()}\n"
             f"- Frequency: {activity_frequency:.1f} activities per week\n"
             f"- Typical Duration: {typical_activity_duration:.0f} minutes\n"
             f"- Typical Distance: {typical_activity_distance:.2f} km\n"

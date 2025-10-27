@@ -21,10 +21,42 @@ services:
     container_name: coach_app
     env_file:
       - .env
+    ports:
+      - "8000:8000"
     environment:
       PYTHONPATH: /app
+      DATABASE_URL: ""
+      DB_HOST: db
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      DB_PORT: ${DB_PORT}
     volumes:
       - .:/app
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       db:
         condition: service_healthy
+
+  bot:
+    build: .
+    container_name: coach_bot
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL: ""
+      DB_HOST: db
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      DB_PORT: ${DB_PORT}
+      API_URL: http://app:8000
+    volumes:
+      - .:/app
+    command: python chat_interface/telegram_bot.py
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started

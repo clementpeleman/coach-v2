@@ -4,3 +4,10 @@ enige regelmaat in workout voorstellen
 
 type workouts:
 - 
+
+
+workout completion watcher, na workout een overzicht geven.
+
+inlogstatus
+
+agent iets te voorzichtig met gezondheidsconcerns.

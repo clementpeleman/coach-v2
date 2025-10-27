@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Garmin Configuration (optional for development)
     garmin_consumer_key: Optional[str] = Field(default=None, env="GARMIN_CONSUMER_KEY")
     garmin_consumer_secret: Optional[str] = Field(default=None, env="GARMIN_CONSUMER_SECRET")
+    garmin_redirect_uri: Optional[str] = Field(default=None, env="GARMIN_REDIRECT_URI")
 
     @field_validator("encryption_key")
     @classmethod
@@ -49,6 +50,14 @@ class Settings(BaseSettings):
         """Validate Telegram bot token format."""
         if not v or ":" not in v:
             raise ValueError("Invalid TELEGRAM_BOT_TOKEN format")
+        return v
+
+    @field_validator("garmin_redirect_uri")
+    @classmethod
+    def validate_garmin_redirect_uri(cls, v: Optional[str]) -> Optional[str]:
+        """Validate Garmin redirect URI format."""
+        if v and not v.startswith("https://"):
+            raise ValueError("GARMIN_REDIRECT_URI must start with https://")
         return v
 
     class Config:

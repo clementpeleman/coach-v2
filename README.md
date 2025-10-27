@@ -7,12 +7,12 @@ An intelligent sports coaching system powered by LangGraph that integrates with 
 
 ## ✨ Features
 
-- 🧠 **AI-Powered**: LangGraph agents with GPT-4o-mini for intelligent conversations
-- ⌚ **Garmin Integration**: Automatic sync of activities, sleep, and stress data
-- 📊 **Smart Profiling**: AI analyzes your training patterns automatically
-- 🏋️ **Custom Workouts**: Generates personalized .FIT training files
-- 🔒 **Secure**: Encrypted password storage + auto-deleting login messages
-- 🐳 **Flexible Deployment**: Run locally or fully containerized
+- 🧠 AI-Powered: LangGraph agents with GPT-4o-mini for intelligent conversations
+- ⌚ Garmin Integration: Automatic sync of activities, sleep, and stress data
+- 📊 Smart Profiling: AI analyzes your training patterns automatically
+- 🏋️ Custom Workouts: Generates personalized .FIT training files
+- 🔒 Secure: Encrypted password storage + auto-deleting login messages
+- 🐳 Flexible Deployment: Run locally or fully containerized
 
 ## 🚀 Quick Start
 
@@ -98,10 +98,10 @@ See [SECURITY.md](SECURITY.md) for full details.
 
 ## 📚 Documentation
 
-- **[QUICK_START.md](QUICK_START.md)** - Detailed setup guide
-- **[SECURITY.md](SECURITY.md)** - Security implementation
-- **[CHANGELOG_SECURITY.md](CHANGELOG_SECURITY.md)** - Recent updates  
-- **[project_specifications.md](project_specifications.md)** - Technical specs
+- [QUICK_START.md](QUICK_START.md) - Detailed setup guide
+- [SECURITY.md](SECURITY.md) - Security implementation
+- [CHANGELOG_SECURITY.md](CHANGELOG_SECURITY.md) - Recent updates  
+- [project_specifications.md](project_specifications.md) - Technical specs
 
 ## 🐛 Troubleshooting
 
@@ -137,7 +137,7 @@ Check [QUICK_START.md](QUICK_START.md) troubleshooting section.
 
 ## 🗺️ Roadmap
 
-### ✅ Phase 1 (MVP) - **COMPLETE**
+### ✅ Phase 1 (MVP) - COMPLETE
 - Telegram bot interface
 - Garmin integration  
 - LangGraph conversational agent
@@ -167,4 +167,4 @@ Proprietary - All rights reserved
 
 ---
 
-**Made with ❤️ using LangGraph and Claude Code**
+Made with ❤️ using LangGraph and Claude Code

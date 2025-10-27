@@ -10,17 +10,17 @@
 
 ### Initial Setup
 
-1. **Clone and navigate to project**:
+1. Clone and navigate to project:
    ```bash
    cd coach-v2
    ```
 
-2. **Install dependencies**:
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure environment**:
+3. Configure environment:
    ```bash
    # Copy example file
    cp .env.example .env
@@ -29,17 +29,17 @@
    nano .env
    ```
 
-4. **Generate encryption key** (already done if you used setup script):
+4. Generate encryption key (already done if you used setup script):
    ```bash
    python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
    ```
 
-5. **Start database**:
+5. Start database:
    ```bash
    ./scripts/dev.sh db
    ```
 
-6. **Run migrations** (if upgrading from old version):
+6. Run migrations (if upgrading from old version):
    ```bash
    ./scripts/dev.sh migrate
    ```
@@ -54,7 +54,7 @@ The `dev.sh` script helps manage your environment:
 ./scripts/dev.sh [command]
 ```
 
-**Commands**:
+Commands:
 - `local` - Switch to local development mode
 - `docker` - Switch to Docker mode
 - `start` - Start all Docker services
@@ -66,12 +66,12 @@ The `dev.sh` script helps manage your environment:
 
 ### Quick Run Scripts
 
-**Run locally** (database in Docker, bot on host):
+Run locally (database in Docker, bot on host):
 ```bash
 ./scripts/run_local.sh
 ```
 
-**Run in Docker** (everything containerized):
+Run in Docker (everything containerized):
 ```bash
 ./scripts/run_docker.sh
 ```
@@ -80,14 +80,14 @@ The `dev.sh` script helps manage your environment:
 
 ### Switching Between Modes
 
-**Local Development** (recommended):
+Local Development (recommended):
 ```bash
 ./scripts/dev.sh local    # Switch to local mode
 ./scripts/dev.sh db       # Start database
 python chat_interface/telegram_bot.py
 ```
 
-**Docker Mode**:
+Docker Mode:
 ```bash
 ./scripts/dev.sh docker   # Switch to Docker mode
 docker-compose up -d      # Start all services
@@ -95,17 +95,17 @@ docker-compose up -d      # Start all services
 
 ### Running Migrations
 
-**Interactive** (asks for confirmation):
+Interactive (asks for confirmation):
 ```bash
 python scripts/migrate_passwords.py
 ```
 
-**Non-interactive** (auto-confirms):
+Non-interactive (auto-confirms):
 ```bash
 python scripts/migrate_passwords.py --yes
 ```
 
-**Dry run** (see what would happen):
+Dry run (see what would happen):
 ```bash
 python scripts/migrate_passwords.py --dry-run
 ```
@@ -114,38 +114,38 @@ python scripts/migrate_passwords.py --dry-run
 
 ### Database Connection Issues
 
-**Error**: `password authentication failed for user "user"`
-**Solution**:
+Error: `password authentication failed for user "user"`
+Solution:
 ```bash
 ./scripts/dev.sh local  # Switch to local mode
 ./scripts/dev.sh status # Check current configuration
 ```
 
-**Error**: `could not translate host name "db"`
-**Solution**: Make sure database is running:
+Error: `could not translate host name "db"`
+Solution: Make sure database is running:
 ```bash
 ./scripts/dev.sh db
 ```
 
 ### Environment Variable Issues
 
-**Error**: `ENCRYPTION_KEY not found`
-**Solution**: Generate and add to .env:
+Error: `ENCRYPTION_KEY not found`
+Solution: Generate and add to .env:
 ```bash
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 # Add output to .env as ENCRYPTION_KEY=...
 ```
 
-**Error**: `Invalid TELEGRAM_BOT_TOKEN format`
-**Solution**: Check your token format in .env (should be like `123456:ABC-DEF...`)
+Error: `Invalid TELEGRAM_BOT_TOKEN format`
+Solution: Check your token format in .env (should be like `123456:ABC-DEF...`)
 
 ### Migration Issues
 
-**Error**: `Already encrypted`
-**Solution**: This is normal - passwords already migrated, skip them
+Error: `Already encrypted`
+Solution: This is normal - passwords already migrated, skip them
 
-**Error**: `Migration failed`
-**Solution**:
+Error: `Migration failed`
+Solution:
 1. Check database is running: `./scripts/dev.sh status`
 2. Verify credentials in .env
 3. Try dry run first: `python scripts/migrate_passwords.py --dry-run`

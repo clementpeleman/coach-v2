@@ -46,7 +46,7 @@ def create_or_update_user_summary(db: Session, user_id: int, summary: schemas.Us
             setattr(db_summary, key, value)
         db_summary.last_updated = datetime.datetime.utcnow()
     else:
-        db_summary = models.UserSummary(**summary.dict(), user_id=user_id, last_updated=datetime.datetime.utcnow())
+        db_summary = models.UserSummary(summary.dict(), user_id=user_id, last_updated=datetime.datetime.utcnow())
         db.add(db_summary)
     db.commit()
     db.refresh(db_summary)
@@ -55,7 +55,7 @@ def create_or_update_user_summary(db: Session, user_id: int, summary: schemas.Us
 def create_activity(db: Session, activity: schemas.ActivityCreate):
     db_activity = db.query(models.ActivitiesHypertable).filter(models.ActivitiesHypertable.activity_id == activity.activity_id).first()
     if not db_activity:
-        db_activity = models.ActivitiesHypertable(**activity.dict())
+        db_activity = models.ActivitiesHypertable(activity.dict())
         db.add(db_activity)
         db.commit()
         db.refresh(db_activity)
