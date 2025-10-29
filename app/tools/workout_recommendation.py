@@ -303,7 +303,8 @@ def save_workout_preferences(
     preferred_types: Optional[list] = None,
     preferred_duration: Optional[int] = None,
     max_intensity: Optional[int] = None,
-    weekly_goal: Optional[int] = None
+    weekly_goal: Optional[int] = None,
+    ftp: Optional[int] = None
 ) -> str:
     """
     Slaat workout preferences op voor een gebruiker.
@@ -314,6 +315,7 @@ def save_workout_preferences(
         preferred_duration: Voorkeur duur in minuten
         max_intensity: Maximale intensiteit (1-5)
         weekly_goal: Doel aantal workouts per week
+        ftp: Functional Threshold Power in watts (voor power-based cycling workouts)
 
     Returns:
         Bevestigingsbericht in het Nederlands
@@ -339,6 +341,8 @@ def save_workout_preferences(
             prefs.max_intensity_level = max_intensity
         if weekly_goal is not None:
             prefs.weekly_workout_goal = weekly_goal
+        if ftp is not None:
+            prefs.ftp = ftp
 
         prefs.updated_at = datetime.utcnow()
 
@@ -354,9 +358,13 @@ def save_workout_preferences(
             lines.append(f"Maximale intensiteit: {max_intensity}/5")
         if weekly_goal:
             lines.append(f"Wekelijks doel: {weekly_goal} workouts")
+        if ftp:
+            lines.append(f"FTP (Functional Threshold Power): {ftp} watts")
 
         lines.append("")
         lines.append("Deze voorkeuren worden gebruikt bij het aanbevelen van workouts.")
+        if ftp:
+            lines.append("Je FTP wordt gebruikt voor power-based cycling workouts.")
 
         return "\n".join(lines)
 

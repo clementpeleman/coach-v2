@@ -39,12 +39,15 @@ class CreateFitFileArgs(BaseModel):
     duration_minutes: Optional[int] = Field(default=None, description="Desired duration in minutes (e.g., 45, 60, 75). Any duration within reasonable range is possible.")
     sport: Optional[str] = Field(default=None, description="Optional sport type: CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING. Leave empty for auto-detect (HERSTEL→CARDIO_TRAINING, others→CYCLING) or detect from user keywords.")
     recovery_score: Optional[float] = Field(default=None, description="Recovery score before workout (0-6)")
+    force_create: bool = Field(default=False, description="Set to True to bypass recovery checks. Use when user explicitly requests 'force' or for testing purposes.")
+    ftp: Optional[int] = Field(default=None, description="Functional Threshold Power in watts. For cycling workouts, this enables power-based targets instead of heart rate zones. If not specified, uses user's stored FTP from preferences.")
 
 class SaveWorkoutPreferencesArgs(BaseModel):
     preferred_types: Optional[List[str]] = Field(default=None, description="List of preferred workout types: ['HERSTEL', 'DUUR', 'THRESHOLD', 'VO2MAX', 'SPRINT']")
     preferred_duration: Optional[int] = Field(default=None, description="Preferred workout duration in minutes")
     max_intensity: Optional[int] = Field(default=None, description="Maximum intensity level (1-5)")
     weekly_goal: Optional[int] = Field(default=None, description="Target number of workouts per week")
+    ftp: Optional[int] = Field(default=None, description="Functional Threshold Power in watts (e.g., 200, 250, 300). Used for power-based cycling workouts.")
 
 class GetWorkoutHistoryArgs(BaseModel):
     days: int = Field(default=30, description="Number of days to look back (default: 30)")
@@ -54,6 +57,7 @@ class UploadWorkoutToGarminArgs(BaseModel):
     duration_minutes: int = Field(description="Duration in minutes (e.g., 45, 60, 75)")
     sport: Optional[str] = Field(default=None, description="Optional Garmin sport type: CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING, etc. Auto-detected if not specified (HERSTEL=CARDIO_TRAINING, others=CYCLING)")
     schedule_date: Optional[str] = Field(default=None, description="Optional date to schedule workout (YYYY-MM-DD format)")
+    force_create: bool = Field(default=False, description="Set to True to bypass recovery checks. Use when user explicitly requests 'force' or for testing purposes.")
 
 def create_conversational_agent(user_id: int, current_date: str = None):
     """
@@ -87,7 +91,9 @@ def create_conversational_agent(user_id: int, current_date: str = None):
         workout_type: Optional[str] = None,
         duration_minutes: Optional[int] = None,
         sport: Optional[str] = None,
-        recovery_score: Optional[float] = None
+        recovery_score: Optional[float] = None,
+        force_create: bool = False,
+        ftp: Optional[int] = None
     ) -> str:
         return create_fit_file(
             user_id=user_id,
@@ -95,7 +101,9 @@ def create_conversational_agent(user_id: int, current_date: str = None):
             workout_type=workout_type,
             duration_minutes=duration_minutes,
             sport=sport,
-            recovery_score=recovery_score
+            recovery_score=recovery_score,
+            force_create=force_create,
+            ftp=ftp
         )
 
     def get_workout_recommendations_for_user() -> str:
@@ -105,14 +113,16 @@ def create_conversational_agent(user_id: int, current_date: str = None):
         preferred_types: Optional[List[str]] = None,
         preferred_duration: Optional[int] = None,
         max_intensity: Optional[int] = None,
-        weekly_goal: Optional[int] = None
+        weekly_goal: Optional[int] = None,
+        ftp: Optional[int] = None
     ) -> str:
         return save_workout_preferences(
             user_id=user_id,
             preferred_types=preferred_types,
             preferred_duration=preferred_duration,
             max_intensity=max_intensity,
-            weekly_goal=weekly_goal
+            weekly_goal=weekly_goal,
+            ftp=ftp
         )
 
     def get_workout_history_for_user(days: int = 30) -> str:
@@ -122,14 +132,16 @@ def create_conversational_agent(user_id: int, current_date: str = None):
         workout_type: str,
         duration_minutes: int,
         sport: Optional[str] = None,
-        schedule_date: Optional[str] = None
+        schedule_date: Optional[str] = None,
+        force_create: bool = False
     ) -> str:
         return upload_workout_to_garmin(
             user_id=user_id,
             workout_type=workout_type,
             duration_minutes=duration_minutes,
             sport=sport,
-            schedule_date=schedule_date
+            schedule_date=schedule_date,
+            force_create=force_create
         )
 
     def check_garmin_permissions_for_user() -> str:
@@ -200,6 +212,28 @@ def create_conversational_agent(user_id: int, current_date: str = None):
             - workout_type="THRESHOLD", duration_minutes=50 → Auto CYCLING (fietsen)
 
             BELANGRIJK: Roep ALTIJD assess_recovery_status AAN VOORDAT je een workout creëert!
+
+            FTP EN POWER-BASED WORKOUTS:
+            - Voor CYCLING workouts kun je power targets gebruiken
+            - Als gebruiker FTP noemt in bericht (bijv "wattage, ftp 170" of "mijn FTP is 250"):
+              * Sla FTP EERST op met save_workout_preferences
+              * Geef dan FTP mee aan create_fit_file (ftp parameter)
+              * Maak workout direct met power targets
+            - Als gebruiker "wattage" of "power" noemt ZONDER FTP te vermelden:
+              * Vraag: "Wat is je FTP in watts?"
+              * Wacht op antwoord, sla FTP op, maak dan workout
+            - Als gebruiker "hartslag" of "heart rate" noemt: gebruik hartslag zones (geen FTP nodig)
+
+            FORCE MODE (voor testing):
+            - Gebruik force_create=True ALLEEN als gebruiker expliciet "force" of "forceer" gebruikt
+            - Force mode omzeilt herstelcontroles en maakt workout ongeacht recovery score
+            - Voorbeeld: "Forceer een VO2MAX van 45 minuten" → force_create=True
+            - Gebruik dit NIET standaard - alleen op expliciete vraag gebruiker!
+
+            BELANGRIJK: FIT BESTANDEN WORDEN NIET AUTOMATISCH VERZONDEN
+            - Na workout creatie krijgt gebruiker knoppen: "Verzend naar Garmin" en "Download FIT"
+            - Vraag NOOIT expliciet of gebruiker het bestand wil downloaden
+            - Gebruiker kiest zelf via de knoppen wat ze willen doen
             """,
             args_schema=CreateFitFileArgs,
         ),
@@ -242,6 +276,12 @@ def create_conversational_agent(user_id: int, current_date: str = None):
             - preferred_duration: Voorkeur duur in minuten (bijv. 60)
             - max_intensity: Maximale intensiteit 1-5 die gebruiker wil
             - weekly_goal: Aantal workouts per week als doel
+            - ftp: Functional Threshold Power in watts (bijv. 200, 250, 300)
+
+            BELANGRIJK:
+            - FTP is nodig voor power-based cycling workouts
+            - Als gebruiker FTP noemt, sla het op met deze tool
+            - FTP wordt automatisch gebruikt voor alle cycling workouts
 
             Deze preferences worden gebruikt bij workout aanbevelingen.
             """,
@@ -307,6 +347,12 @@ def create_conversational_agent(user_id: int, current_date: str = None):
             3. Auto-detect sport type (tenzij opgegeven)
             4. Upload naar Garmin Connect
             5. Bevestig beschikbaarheid op horloge
+
+            FORCE MODE (voor testing):
+            - Gebruik force_create=True ALLEEN als gebruiker expliciet "force" of "forceer" gebruikt
+            - Force mode omzeilt herstelcontroles en upload workout ongeacht recovery score
+            - Voorbeeld: "Upload geforceerd een VO2MAX van 45 minuten" → force_create=True
+            - Gebruik dit NIET standaard - alleen op expliciete vraag gebruiker!
             """,
             args_schema=UploadWorkoutToGarminArgs,
         ),
@@ -340,12 +386,15 @@ BELANGRIJKE TAALINSTELLINGEN:
 - Gebruik Nederlands voor alle tekst, uitleg en data-presentatie
 - Vertaal Engelse veldnamen naar Nederlands waar mogelijk (bijv. "Steps" → "Stappen")
 
-OPMAAKREGELS:
-- GEEN markdown formatting (geen vet, geen *cursief*, geen ### headers)
-- GEEN emojis in je antwoorden
-- Gebruik simpele, duidelijke tekstopmaak
-- Gebruik HOOFDLETTERS voor sectietitels (bijv. "DAGELIJKSE SAMENVATTING" niet "### Dagelijkse Samenvatting")
+OPMAAKREGELS VOOR TELEGRAM:
+- Gebruik HTML formatting voor je antwoorden (dit wordt automatisch correct getoond in Telegram)
+- Voor VET/NADRUK: gebruik <b>tekst</b> (bijvoorbeeld: "<b>Gemiddelde stress:</b> 36")
+- Voor cursief: gebruik <i>tekst</i> (bijvoorbeeld: "<i>Let op:</i> je herstel is laag")
+- Voor code/data: gebruik <code>tekst</code>
+- GEEN emojis in je antwoorden (emojis in tool output zijn wel ok)
+- Gebruik HOOFDLETTERS voor grote sectietitels (bijv. "DAGELIJKSE SAMENVATTING")
 - Gebruik inspringingen en regelafbrekingen voor duidelijkheid
+- Escape speciale HTML karakters: & wordt &amp;, < wordt &lt;, > wordt &gt;
 
 BELANGRIJKE DATUM CONTEXT:
 - De huidige datum kan worden opgehaald met de get_current_date tool
@@ -365,11 +414,13 @@ Workouts worden DYNAMISCH gegenereerd op basis van TYPE en DUUR.
 Geen vaste templates meer - elke duur is mogelijk!
 
 Er zijn 5 workout types beschikbaar:
-- HERSTEL (Recovery): Zeer lage intensiteit (Zone 1) - Voor actief herstel (wandelen, rustig fietsen)
-- DUUR (Endurance): Lange, lage intensiteit (Zone 2) - Voor aerobe basis
-- THRESHOLD: Tempo training op drempel (Zone 4) - Voor FTP verbetering
-- VO2MAX: Korte intensieve intervallen (Zone 5) - Voor maximale zuurstofopname
-- SPRINT: Zeer korte max inspanningen - Voor anaerobe power
+- HERSTEL (Recovery): Zeer lage intensiteit (Zone 1) - Voor actief herstel (wandelen, rustig fietsen) [15-120 min]
+- DUUR (Endurance): Lange, lage intensiteit (Zone 2) - Voor aerobe basis [30-180 min]
+- THRESHOLD: Tempo training op drempel (Zone 4) - Voor FTP verbetering [30-150 min] - BESTE KEUZE voor lange interval trainingen!
+- VO2MAX: Korte intensieve intervallen (Zone 5) - Voor maximale zuurstofopname [20-90 min] - Alleen voor kortere intervallen!
+- SPRINT: Zeer korte max inspanningen - Voor anaerobe power [15-60 min]
+
+BELANGRIJK: Voor "interval training" van >90 minuten, gebruik THRESHOLD (niet VO2MAX)!
 
 KRITISCHE WORKFLOW VOOR TRAINING CREATIE:
 1. Wanneer gebruiker vraagt om workout aanbeveling:
@@ -381,9 +432,26 @@ KRITISCHE WORKFLOW VOOR TRAINING CREATIE:
 2. Wanneer gebruiker vraagt om specifieke workout te maken:
    - Roep EERST assess_recovery_status aan
    - Controleer of gevraagde intensiteit past bij herstel
-   - Waarschuw als het te intensief is voor hun herstelstatus
+   - Als herstelstatus NIET optimaal is en gebruiker vraagt intensieve workout (THRESHOLD, VO2MAX, SPRINT):
+     * Waarschuw de gebruiker expliciet met herstelscore
+     * Zeg: "Je herstelstatus is momenteel niet optimaal, met een herstelscore van X/6"
+     * Raad hersteltraining aan
+     * Vraag: "Wil je dat ik een hersteltraining voor je maak?"
+     * Gebruiker krijgt dan knoppen om te kiezen
+   - STOP HIER en wacht op gebruikers keuze (maak GEEN workout zonder toestemming)
 
-3. Bij creëren van workout:
+3. Voor INTERVAL workouts (THRESHOLD, VO2MAX, SPRINT) op de fiets:
+   - Als gebruiker FTP noemt in bericht (bijv "FTP is 250" of "wattage, ftp 170"):
+     * Sla FTP EERST op met save_workout_preferences (ftp parameter)
+     * Gebruik dan automatisch power targets bij workout creatie
+     * Geef FTP mee aan create_fit_file
+   - Als gebruiker geen FTP heeft genoemd en ook niet in database:
+     * Vraag: "Wil je deze workout op basis van HARTSLAG of WATTAGE (power)?"
+     * Als wattage: "Voor wattage heb ik je FTP nodig. Wat is je FTP in watts?"
+     * WACHT op antwoord met FTP, sla dan op en maak workout
+   - Als gebruiker hartslag noemt: gebruik heartrate zones (geen FTP nodig)
+
+4. Bij creëren van workout:
    - Gebruik create_fit_file met workout_type en duration_minutes
    - KRITISCH: Detecteer SPORT TYPE uit wat gebruiker vraagt:
 
@@ -404,17 +472,23 @@ KRITISCHE WORKFLOW VOOR TRAINING CREATIE:
    - De workout wordt automatisch gegenereerd met optimale structuur
    - Geef altijd recovery_score mee als je die hebt
 
-4. AUTOMATISCHE UPLOAD NAAR GARMIN CONNECT:
-   - Check eerst WORKOUT_IMPORT permissie met check_garmin_workout_permissions
-   - Als permissie aanwezig: upload workout automatisch naar Garmin Connect
-   - Gebruik upload_workout_to_garmin met gekozen template
-   - Workout synct automatisch naar gebruikers horloge
-   - GEEN handmatige FIT file download meer nodig!
-
-5. Na workout creatie/upload:
-   - Bevestig dat workout op Garmin Connect staat
-   - Leg uit dat het automatisch naar horloge synct
+4. NA WORKOUT CREATIE:
+   - Gebruik ALLEEN create_fit_file om workout aan te maken
+   - Gebruik NOOIT automatisch upload_workout_to_garmin
+   - Gebruiker krijgt knoppen om te kiezen: "Verzend naar Garmin" of "Download FIT"
+   - Leg kort uit wat de workout inhoudt (zones, structuur)
    - Workout wordt automatisch opgeslagen in history
+
+FORCE MODE (ALLEEN VOOR TESTING):
+- Force mode OMZEILT herstelcontroles en maakt workout ALTIJD aan
+- Gebruik force_create=True ALLEEN als gebruiker expliciet "force" of "forceer" gebruikt
+- Detecteer keywords: "forceer", "force", "geforceerd", "bypass herstel"
+- VOORBEELDEN:
+  * "Forceer een VO2MAX van 45 minuten" → force_create=True
+  * "Maak geforceerd een THRESHOLD van 60 min" → force_create=True
+  * "Bypass herstelcheck en maak SPRINT" → force_create=True
+- WAARSCHUWING: Vertel gebruiker dat force mode herstelcontroles omzeilt
+- Gebruik dit NIET standaard - alleen op expliciete vraag!
 
 HERSTEL RICHTLIJNEN:
 - Herstelscore < 2: Alleen HERSTEL (wandelen, zeer rustig fietsen)

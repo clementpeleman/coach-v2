@@ -5,6 +5,20 @@ from typing import List, Dict, Optional
 import random
 
 
+# FTP Zone definities (percentage van FTP)
+# Voor cycling workouts gebruiken we power zones in plaats van hartslag zones
+FTP_ZONES = {
+    1: (0.50, 0.60),    # Zone 1: Active Recovery (50-60% FTP)
+    2: (0.60, 0.75),    # Zone 2: Endurance (60-75% FTP)
+    3: (0.75, 0.90),    # Zone 3: Tempo (75-90% FTP)
+    4: (0.90, 1.05),    # Zone 4: Threshold (90-105% FTP)
+    5: (1.05, 1.20),    # Zone 5: VO2max (105-120% FTP)
+}
+
+# Default FTP waarde (wordt overschreven door user preferences)
+DEFAULT_FTP = 200  # Watts
+
+
 # Sport type mapping - Maps Nederlandse keywords naar Garmin sport types
 SPORT_KEYWORDS = {
     "wandelen": "CARDIO_TRAINING",
@@ -99,10 +113,33 @@ WORKOUT_RECIPES = {
 }
 
 
+def calculate_power_range(zone: int, ftp: int) -> Dict[str, int]:
+    """
+    Berekent power range in watts voor een gegeven zone en FTP.
+
+    Args:
+        zone: Zone nummer (1-5)
+        ftp: Functional Threshold Power in watts
+
+    Returns:
+        Dict met 'min' en 'max' power in watts
+    """
+    if zone not in FTP_ZONES:
+        return {"min": 0, "max": 0}
+
+    low_pct, high_pct = FTP_ZONES[zone]
+    return {
+        "min": int(ftp * low_pct),
+        "max": int(ftp * high_pct),
+        "mid": int(ftp * ((low_pct + high_pct) / 2))  # Midpoint van zone
+    }
+
+
 def generate_workout(
     workout_type: str,
     duration_minutes: int,
-    user_preferences: Optional[Dict] = None
+    user_preferences: Optional[Dict] = None,
+    sport: Optional[str] = None
 ) -> Dict:
     """
     Genereert een workout dynamisch op basis van type en duur.
@@ -110,7 +147,8 @@ def generate_workout(
     Args:
         workout_type: Type workout (HERSTEL, DUUR, THRESHOLD, VO2MAX, SPRINT)
         duration_minutes: Gewenste totale duur in minuten
-        user_preferences: Optionele preferences (bijv. max_intensity)
+        user_preferences: Optionele preferences (bijv. max_intensity, ftp)
+        sport: Sport type (CYCLING, RUNNING, etc.) - bepaalt of power of HR gebruikt wordt
 
     Returns:
         Dict met workout metadata en steps
@@ -121,6 +159,20 @@ def generate_workout(
 
     recipe = WORKOUT_RECIPES[workout_type]
     structure = recipe["structure"]
+
+    # Bepaal of we power of heart rate gebruiken
+    # Power gebruiken voor CYCLING workouts (als FTP beschikbaar)
+    use_power = False
+    ftp = DEFAULT_FTP
+
+    if user_preferences:
+        ftp = user_preferences.get('ftp', DEFAULT_FTP)
+
+    # Gebruik power voor cycling workouts als FTP > 0
+    if sport and 'CYCLING' in sport.upper() and ftp > 0:
+        use_power = True
+    elif not sport and recipe.get("default_sport") == "CYCLING" and ftp > 0:
+        use_power = True
 
     # Bereken tijden
     total_seconds = duration_minutes * 60
@@ -133,13 +185,25 @@ def generate_workout(
 
     # 1. Warming-up (als van toepassing)
     if warmup_seconds > 0:
-        steps.append({
-            "wkt_step_name": "Warming-up",
-            "duration_type": "time",
-            "duration_value": warmup_seconds,
-            "target_type": "heart_rate",
-            "target_value": 2,  # Zone 2
-        })
+        if use_power:
+            power_range = calculate_power_range(2, ftp)
+            steps.append({
+                "wkt_step_name": "Warming-up",
+                "duration_type": "time",
+                "duration_value": warmup_seconds,
+                "target_type": "power",
+                "target_value": power_range["mid"],  # Midpoint van Zone 2
+                "target_low": power_range["min"],
+                "target_high": power_range["max"],
+            })
+        else:
+            steps.append({
+                "wkt_step_name": "Warming-up",
+                "duration_type": "time",
+                "duration_value": warmup_seconds,
+                "target_type": "heart_rate",
+                "target_value": 2,  # Zone 2
+            })
 
     # 2. Werk gedeelte
     if structure["intervals"]:
@@ -149,31 +213,57 @@ def generate_workout(
             work_zones=structure["work_zones"],
             interval_work_options=structure["interval_work_duration"],
             interval_rest_options=structure["interval_rest_duration"],
-            rest_zone=structure["rest_zone"]
+            rest_zone=structure["rest_zone"],
+            use_power=use_power,
+            ftp=ftp
         )
         steps.extend(interval_steps)
     else:
         # Continue training
         work_zone = structure["work_zones"][0]
-        target_type = "heart_rate" if work_zone > 0 else "open"
 
-        steps.append({
-            "wkt_step_name": f"{workout_type} interval",
-            "duration_type": "time",
-            "duration_value": work_seconds,
-            "target_type": target_type,
-            "target_value": work_zone if work_zone > 0 else None,
-        })
+        if use_power:
+            power_range = calculate_power_range(work_zone, ftp)
+            steps.append({
+                "wkt_step_name": f"{workout_type} interval",
+                "duration_type": "time",
+                "duration_value": work_seconds,
+                "target_type": "power",
+                "target_value": power_range["mid"],
+                "target_low": power_range["min"],
+                "target_high": power_range["max"],
+            })
+        else:
+            target_type = "heart_rate" if work_zone > 0 else "open"
+            steps.append({
+                "wkt_step_name": f"{workout_type} interval",
+                "duration_type": "time",
+                "duration_value": work_seconds,
+                "target_type": target_type,
+                "target_value": work_zone if work_zone > 0 else None,
+            })
 
     # 3. Cool-down (als van toepassing)
     if cooldown_seconds > 0:
-        steps.append({
-            "wkt_step_name": "Cool-down",
-            "duration_type": "time",
-            "duration_value": cooldown_seconds,
-            "target_type": "heart_rate",
-            "target_value": 1,  # Zone 1
-        })
+        if use_power:
+            power_range = calculate_power_range(1, ftp)
+            steps.append({
+                "wkt_step_name": "Cool-down",
+                "duration_type": "time",
+                "duration_value": cooldown_seconds,
+                "target_type": "power",
+                "target_value": power_range["mid"],  # Midpoint van Zone 1
+                "target_low": power_range["min"],
+                "target_high": power_range["max"],
+            })
+        else:
+            steps.append({
+                "wkt_step_name": "Cool-down",
+                "duration_type": "time",
+                "duration_value": cooldown_seconds,
+                "target_type": "heart_rate",
+                "target_value": 1,  # Zone 1
+            })
 
     # Genereer beschrijvende naam
     workout_name = _generate_workout_name(workout_type, duration_minutes, structure)
@@ -194,12 +284,23 @@ def _generate_interval_steps(
     work_zones: List[int],
     interval_work_options: List[float],
     interval_rest_options: List[float],
-    rest_zone: int
+    rest_zone: int,
+    use_power: bool = False,
+    ftp: int = DEFAULT_FTP
 ) -> List[Dict]:
     """
     Genereert interval steps dynamisch.
 
     Strategie: Vul beschikbare tijd met afwisselend werk + herstel intervallen.
+
+    Args:
+        work_seconds: Totale tijd voor werk intervallen
+        work_zones: Zones voor werk intervallen
+        interval_work_options: Mogelijke werk interval lengtes (minuten)
+        interval_rest_options: Mogelijke rust interval lengtes (minuten)
+        rest_zone: Zone voor herstel
+        use_power: Of power gebruikt moet worden (vs heart rate)
+        ftp: FTP waarde in watts
     """
     steps = []
     remaining_seconds = work_seconds
@@ -226,34 +327,71 @@ def _generate_interval_steps(
 
         # Voeg werk interval toe
         work_zone = random.choice(work_zones)
-        steps.append({
-            "wkt_step_name": f"Interval {interval_count}",
-            "duration_type": "time",
-            "duration_value": work_interval_seconds,
-            "target_type": "heart_rate" if work_zone > 0 else "open",
-            "target_value": work_zone if work_zone > 0 else None,
-        })
+
+        if use_power:
+            power_range = calculate_power_range(work_zone, ftp)
+            steps.append({
+                "wkt_step_name": f"Interval {interval_count}",
+                "duration_type": "time",
+                "duration_value": work_interval_seconds,
+                "target_type": "power",
+                "target_value": power_range["mid"],
+                "target_low": power_range["min"],
+                "target_high": power_range["max"],
+            })
+        else:
+            steps.append({
+                "wkt_step_name": f"Interval {interval_count}",
+                "duration_type": "time",
+                "duration_value": work_interval_seconds,
+                "target_type": "heart_rate" if work_zone > 0 else "open",
+                "target_value": work_zone if work_zone > 0 else None,
+            })
         remaining_seconds -= work_interval_seconds
 
         # Voeg herstel interval toe (als er nog tijd is EN dit niet het laatste interval is)
         if remaining_seconds >= rest_interval_seconds:
-            steps.append({
-                "wkt_step_name": "Herstel",
-                "duration_type": "time",
-                "duration_value": rest_interval_seconds,
-                "target_type": "heart_rate",
-                "target_value": rest_zone,
-            })
+            if use_power:
+                rest_power_range = calculate_power_range(rest_zone, ftp)
+                steps.append({
+                    "wkt_step_name": "Herstel",
+                    "duration_type": "time",
+                    "duration_value": rest_interval_seconds,
+                    "target_type": "power",
+                    "target_value": rest_power_range["mid"],
+                    "target_low": rest_power_range["min"],
+                    "target_high": rest_power_range["max"],
+                })
+            else:
+                steps.append({
+                    "wkt_step_name": "Herstel",
+                    "duration_type": "time",
+                    "duration_value": rest_interval_seconds,
+                    "target_type": "heart_rate",
+                    "target_value": rest_zone,
+                })
             remaining_seconds -= rest_interval_seconds
         elif remaining_seconds > 60:
             # Rest tijd gebruiken voor laatste herstel
-            steps.append({
-                "wkt_step_name": "Herstel",
-                "duration_type": "time",
-                "duration_value": remaining_seconds,
-                "target_type": "heart_rate",
-                "target_value": rest_zone,
-            })
+            if use_power:
+                rest_power_range = calculate_power_range(rest_zone, ftp)
+                steps.append({
+                    "wkt_step_name": "Herstel",
+                    "duration_type": "time",
+                    "duration_value": remaining_seconds,
+                    "target_type": "power",
+                    "target_value": rest_power_range["mid"],
+                    "target_low": rest_power_range["min"],
+                    "target_high": rest_power_range["max"],
+                })
+            else:
+                steps.append({
+                    "wkt_step_name": "Herstel",
+                    "duration_type": "time",
+                    "duration_value": remaining_seconds,
+                    "target_type": "heart_rate",
+                    "target_value": rest_zone,
+                })
             remaining_seconds = 0
         else:
             # Geen tijd meer voor herstel
@@ -293,7 +431,7 @@ def get_recommended_durations(workout_type: str) -> List[int]:
     recommendations = {
         "HERSTEL": [30, 45, 60],
         "DUUR": [45, 60, 75, 90, 120],
-        "THRESHOLD": [45, 60, 75],
+        "THRESHOLD": [45, 60, 75, 90, 120],  # Ook langere duren toegevoegd
         "VO2MAX": [30, 45, 60],
         "SPRINT": [20, 30, 45]
     }
@@ -319,7 +457,7 @@ def validate_workout_duration(workout_type: str, duration_minutes: int) -> tuple
     max_durations = {
         "HERSTEL": 120,
         "DUUR": 180,
-        "THRESHOLD": 120,
+        "THRESHOLD": 150,  # Verhoogd voor lange interval trainingen
         "VO2MAX": 90,
         "SPRINT": 60
     }

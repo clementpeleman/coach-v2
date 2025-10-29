@@ -16,7 +16,8 @@ def upload_workout_to_garmin(
     workout_type: str,
     duration_minutes: int,
     sport: str = None,
-    schedule_date: Optional[str] = None
+    schedule_date: Optional[str] = None,
+    force_create: bool = False
 ) -> str:
     """
     Upload een dynamisch gegenereerde workout naar Garmin Connect.
@@ -27,6 +28,7 @@ def upload_workout_to_garmin(
         duration_minutes: Gewenste duur in minuten
         sport: Garmin sport type (CARDIO_TRAINING, RUNNING, CYCLING, etc.) - Auto-detect if None (HERSTEL→CARDIO_TRAINING, others→CYCLING)
         schedule_date: Optioneel - plan workout op datum (YYYY-MM-DD format)
+        force_create: If True, bypass recovery checks (useful for testing)
 
     Returns:
         Nederlands bevestigingsbericht

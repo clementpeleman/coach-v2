@@ -15,6 +15,7 @@ from app.config import settings
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.constants import ParseMode
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.agents.conversational_agent import create_conversational_agent
@@ -163,6 +164,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.edit_message_text(text=f"❌ Fout bij verbreken: {str(e)}")
     elif query.data == 'garmin_disconnect_cancel':
         await query.edit_message_text(text="Verbreken geannuleerd.")
+    elif query.data == 'workout_send_garmin':
+        await handle_workout_send_garmin(update, context)
+    elif query.data == 'workout_download':
+        await handle_workout_download(update, context)
+    elif query.data == 'workout_cancel':
+        await handle_workout_cancel(update, context)
+    elif query.data == 'recovery_continue':
+        await handle_recovery_continue(update, context)
+    elif query.data == 'recovery_alternative':
+        await handle_recovery_alternative(update, context)
 
 async def garmin_connect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start Garmin OAuth2 flow."""
@@ -418,6 +429,232 @@ async def garmin_disconnect_command(update: Update, context: ContextTypes.DEFAUL
     )
 
 
+async def handle_workout_send_garmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle workout upload to Garmin Connect."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    workout_details = context.user_data.get('pending_workout')
+
+    if not workout_details:
+        await query.edit_message_text(text="❌ Geen workout gevonden. Probeer opnieuw.")
+        return
+
+    try:
+        await query.edit_message_text(text="⏳ Bezig met uploaden naar Garmin Connect...")
+
+        # Use the upload_workout_to_garmin tool
+        from app.tools.garmin_workout_upload import upload_workout_to_garmin
+
+        result = upload_workout_to_garmin(
+            user_id=user_id,
+            workout_type=workout_details['workout_type'],
+            duration_minutes=workout_details['duration_minutes'],
+            sport=workout_details['sport']
+        )
+
+        # Clean up the FIT file
+        if os.path.exists(workout_details['file_path']):
+            os.remove(workout_details['file_path'])
+
+        # Clear pending workout
+        context.user_data.pop('pending_workout', None)
+
+        # Clear workout context from chat history to prevent re-creation
+        if "chat_history" in context.user_data and context.user_data["chat_history"]:
+            # Replace the last AI message with a simple confirmation
+            for i in range(len(context.user_data["chat_history"]) - 1, -1, -1):
+                if isinstance(context.user_data["chat_history"][i], AIMessage):
+                    context.user_data["chat_history"][i] = AIMessage(
+                        content="Workout succesvol geüpload naar Garmin Connect."
+                    )
+                    break
+
+        await query.edit_message_text(text=f"✅ {result}", parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        logger.error(f"Error uploading workout to Garmin: {e}")
+        await query.edit_message_text(
+            text=f"❌ Fout bij uploaden naar Garmin:\n{str(e)}",
+            parse_mode=ParseMode.HTML
+        )
+
+
+async def handle_workout_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle workout FIT file download."""
+    query = update.callback_query
+    await query.answer()
+
+    workout_details = context.user_data.get('pending_workout')
+
+    if not workout_details:
+        await query.edit_message_text(text="❌ Geen workout gevonden. Probeer opnieuw.")
+        return
+
+    try:
+        fit_file_path = workout_details['file_path']
+
+        if not os.path.exists(fit_file_path):
+            await query.edit_message_text(text="❌ Workout bestand niet gevonden.")
+            return
+
+        # Send the FIT file
+        await query.message.reply_document(
+            document=open(fit_file_path, 'rb'),
+            filename="workout.fit"
+        )
+
+        # Clean up
+        os.remove(fit_file_path)
+        context.user_data.pop('pending_workout', None)
+
+        await query.edit_message_text(text="✅ Workout FIT bestand verzonden!")
+
+    except Exception as e:
+        logger.error(f"Error sending FIT file: {e}")
+        await query.edit_message_text(text=f"❌ Fout bij versturen bestand: {str(e)}")
+
+
+async def handle_workout_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle workout cancellation."""
+    query = update.callback_query
+    await query.answer()
+
+    workout_details = context.user_data.get('pending_workout')
+
+    if workout_details:
+        # Clean up the FIT file
+        if os.path.exists(workout_details['file_path']):
+            os.remove(workout_details['file_path'])
+
+        # Clear pending workout
+        context.user_data.pop('pending_workout', None)
+
+    await query.edit_message_text(text="❌ Workout geannuleerd.")
+
+
+async def handle_recovery_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle user choosing to continue with original intense workout despite recovery warning."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    original_request = context.user_data.get('original_request')
+
+    if not original_request:
+        await query.edit_message_text(text="❌ Originele vraag niet gevonden. Probeer opnieuw.")
+        return
+
+    await query.edit_message_text(text="✅ Oké, ik maak de workout met force mode...")
+
+    # Re-invoke agent with force flag in message
+    if "chat_history" not in context.user_data:
+        context.user_data["chat_history"] = []
+
+    # Set force mode flag to persist across messages
+    context.user_data['force_mode_active'] = True
+    context.user_data['force_mode_request'] = original_request
+
+    current_date = datetime.date.today().isoformat()
+    agent_executor = create_conversational_agent(user_id, current_date=current_date)
+
+    # Add force keyword to bypass recovery check
+    forced_message = f"Forceer: {original_request}"
+    result = agent_executor.invoke({"input": forced_message, "chat_history": context.user_data["chat_history"]})
+
+    context.user_data["chat_history"].append(HumanMessage(content=forced_message))
+    context.user_data["chat_history"].append(AIMessage(content=result["output"]))
+
+    # Check if workout was created
+    fit_file_path = None
+    workout_details = None
+    for action, observation in result.get("intermediate_steps", []):
+        if action.tool == "create_fit_file":
+            fit_file_path = observation
+            workout_details = {
+                'file_path': fit_file_path,
+                'workout_type': action.tool_input.get('workout_type'),
+                'duration_minutes': action.tool_input.get('duration_minutes'),
+                'sport': action.tool_input.get('sport'),
+            }
+            break
+
+    if fit_file_path:
+        context.user_data['pending_workout'] = workout_details
+
+        keyboard = [
+            [
+                InlineKeyboardButton("📤 Verzend naar Garmin", callback_data='workout_send_garmin'),
+                InlineKeyboardButton("💾 Download FIT file", callback_data='workout_download')
+            ],
+            [InlineKeyboardButton("❌ Annuleer", callback_data='workout_cancel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.reply_text(result["output"], reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    else:
+        await query.message.reply_text(result["output"], parse_mode=ParseMode.HTML)
+
+    # Clear original request
+    context.user_data.pop('original_request', None)
+
+
+async def handle_recovery_alternative(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle user choosing recovery workout alternative."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    await query.edit_message_text(text="✅ Goed gekozen! Ik maak een hersteltraining voor je...")
+
+    if "chat_history" not in context.user_data:
+        context.user_data["chat_history"] = []
+
+    current_date = datetime.date.today().isoformat()
+    agent_executor = create_conversational_agent(user_id, current_date=current_date)
+
+    # Request recovery workout
+    recovery_message = "Maak een hersteltraining van 45 minuten"
+    result = agent_executor.invoke({"input": recovery_message, "chat_history": context.user_data["chat_history"]})
+
+    context.user_data["chat_history"].append(HumanMessage(content=recovery_message))
+    context.user_data["chat_history"].append(AIMessage(content=result["output"]))
+
+    # Check if workout was created
+    fit_file_path = None
+    workout_details = None
+    for action, observation in result.get("intermediate_steps", []):
+        if action.tool == "create_fit_file":
+            fit_file_path = observation
+            workout_details = {
+                'file_path': fit_file_path,
+                'workout_type': action.tool_input.get('workout_type'),
+                'duration_minutes': action.tool_input.get('duration_minutes'),
+                'sport': action.tool_input.get('sport'),
+            }
+            break
+
+    if fit_file_path:
+        context.user_data['pending_workout'] = workout_details
+
+        keyboard = [
+            [
+                InlineKeyboardButton("📤 Verzend naar Garmin", callback_data='workout_send_garmin'),
+                InlineKeyboardButton("💾 Download FIT file", callback_data='workout_download')
+            ],
+            [InlineKeyboardButton("❌ Annuleer", callback_data='workout_cancel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.reply_text(result["output"], reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    else:
+        await query.message.reply_text(result["output"], parse_mode=ParseMode.HTML)
+
+    # Clear original request
+    context.user_data.pop('original_request', None)
+
+
 async def conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle conversation."""
     if not update.message:
@@ -451,25 +688,100 @@ async def conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Get current date for each message to ensure accuracy
     current_date = datetime.date.today().isoformat()
 
+    # Check if force mode is active from button press
+    force_mode_active = context.user_data.get('force_mode_active', False)
+    if force_mode_active:
+        # Append force keyword to message to bypass recovery checks
+        original_message = message
+        message = f"Forceer: {context.user_data.get('force_mode_request', message)} - {message}"
+
     agent_executor = create_conversational_agent(user_id, current_date=current_date)
 
     result = agent_executor.invoke({"input": message, "chat_history": context.user_data["chat_history"]})
 
-    context.user_data["chat_history"].append(HumanMessage(content=message))
+    # Store original message in history if force mode was used
+    if force_mode_active:
+        context.user_data["chat_history"].append(HumanMessage(content=original_message))
+    else:
+        context.user_data["chat_history"].append(HumanMessage(content=message))
+
     context.user_data["chat_history"].append(AIMessage(content=result["output"]))
 
+    # Check for recovery warning in the output
+    output_lower = result["output"].lower()
+    is_recovery_warning = (
+        ("herstelstatus" in output_lower or "herstelscore" in output_lower) and
+        ("niet optimaal" in output_lower or "raad aan" in output_lower or "beter is om" in output_lower) and
+        "hersteltraining" in output_lower
+    )
+
+    # Check if a workout was created or uploaded
     fit_file_path = None
+    workout_details = None
+    workout_uploaded = False
+
     for action, observation in result.get("intermediate_steps", []):
         if action.tool == "create_fit_file":
             fit_file_path = observation
+            # Store workout details for later use
+            workout_details = {
+                'file_path': fit_file_path,
+                'workout_type': action.tool_input.get('workout_type'),
+                'duration_minutes': action.tool_input.get('duration_minutes'),
+                'sport': action.tool_input.get('sport'),
+            }
             break
+        elif action.tool == "upload_workout_to_garmin":
+            # Workout was uploaded directly to Garmin
+            workout_uploaded = True
+            # Don't break - keep looking for create_fit_file in case both were called
 
-    if fit_file_path:
-        await update.message.reply_document(document=open(fit_file_path, 'rb'), filename="workout.fit")
-        os.remove(fit_file_path)
-        await update.message.reply_text(result["output"])
+    # Show recovery warning buttons if detected
+    if is_recovery_warning and not fit_file_path:
+        # Store the original request for later
+        context.user_data['original_request'] = message
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Ga door met originele vraag", callback_data='recovery_continue'),
+                InlineKeyboardButton("💆 Maak hersteltraining", callback_data='recovery_alternative')
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(result["output"], reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    elif fit_file_path:
+        # Store workout in context for callback
+        context.user_data['pending_workout'] = workout_details
+
+        # Clear force mode after successful workout creation
+        context.user_data.pop('force_mode_active', None)
+        context.user_data.pop('force_mode_request', None)
+
+        # Create inline keyboard with action buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("📤 Verzend naar Garmin", callback_data='workout_send_garmin'),
+                InlineKeyboardButton("💾 Download FIT file", callback_data='workout_download')
+            ],
+            [InlineKeyboardButton("❌ Annuleer", callback_data='workout_cancel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(result["output"], reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     else:
-        await update.message.reply_text(result["output"])
+        await update.message.reply_text(result["output"], parse_mode=ParseMode.HTML)
+
+    # If workout was uploaded to Garmin, clear the workout context from chat history
+    # to prevent the agent from trying to recreate it on subsequent messages
+    if workout_uploaded and not fit_file_path:
+        # Replace the last AI message with a shorter version that doesn't include workout details
+        if context.user_data["chat_history"]:
+            last_message = context.user_data["chat_history"][-1]
+            if isinstance(last_message, AIMessage):
+                # Add a simple confirmation that workout is complete
+                context.user_data["chat_history"][-1] = AIMessage(
+                    content="Workout succesvol geüpload naar Garmin Connect."
+                )
 
 def main() -> None:
     """Start the bot."""

@@ -118,6 +118,7 @@ class WorkoutPreferences(Base):
     preferred_duration_minutes = Column(Integer, nullable=True)  # Preferred workout duration
     max_intensity_level = Column(Integer, nullable=True)  # 1-5, max intensity user wants
     weekly_workout_goal = Column(Integer, nullable=True)  # Target number of workouts per week
+    ftp = Column(Integer, nullable=True)  # Functional Threshold Power in watts (for power-based cycling workouts)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -15,7 +15,9 @@ def create_fit_file(
     workout_type: Optional[str] = None,
     duration_minutes: Optional[int] = None,
     sport: Optional[str] = None,
-    recovery_score: Optional[float] = None
+    recovery_score: Optional[float] = None,
+    force_create: bool = False,
+    ftp: Optional[int] = None
 ) -> str:
     """
     Creates a .fit file dynamically based on workout type, duration and sport.
@@ -27,6 +29,8 @@ def create_fit_file(
         duration_minutes: Desired duration in minutes
         sport: Sport type (CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING, etc.) - auto-detect if None (HERSTEL→CARDIO_TRAINING, others→CYCLING)
         recovery_score: Recovery score before workout (for history tracking)
+        force_create: If True, bypass recovery checks (useful for testing)
+        ftp: Functional Threshold Power in watts (for power-based cycling workouts)
 
     Each step should be a dictionary with keys:
     - wkt_step_name: str
@@ -45,6 +49,25 @@ def create_fit_file(
 
     workout_name = None
 
+    # Haal user preferences op (voor FTP)
+    user_preferences = None
+    if user_id and ftp is None:
+        # Probeer FTP uit database te halen
+        from app.database.models import WorkoutPreferences
+        db = SessionLocal()
+        try:
+            prefs = db.query(WorkoutPreferences).filter(
+                WorkoutPreferences.user_id == user_id
+            ).first()
+            if prefs and prefs.ftp:
+                ftp = prefs.ftp
+        finally:
+            db.close()
+
+    # Maak user_preferences dict
+    if ftp:
+        user_preferences = {'ftp': ftp}
+
     # Genereer workout dynamisch als type en duur gegeven zijn
     if workout_type and duration_minutes and not workout_steps:
         # Valideer duur
@@ -52,8 +75,13 @@ def create_fit_file(
         if not is_valid:
             raise ValueError(message)
 
-        # Genereer workout
-        workout_data = generate_workout(workout_type, duration_minutes)
+        # Genereer workout met sport en FTP
+        workout_data = generate_workout(
+            workout_type,
+            duration_minutes,
+            user_preferences=user_preferences,
+            sport=sport
+        )
         workout_steps = workout_data["steps"]
         workout_name = workout_data["name"]
 
@@ -61,7 +89,12 @@ def create_fit_file(
     if workout_type and not duration_minutes and not workout_steps:
         recommended = get_recommended_durations(workout_type)
         duration_minutes = recommended[0]  # Neem eerste aanbevolen duur
-        workout_data = generate_workout(workout_type, duration_minutes)
+        workout_data = generate_workout(
+            workout_type,
+            duration_minutes,
+            user_preferences=user_preferences,
+            sport=sport
+        )
         workout_steps = workout_data["steps"]
         workout_name = workout_data["name"]
 
@@ -69,21 +102,26 @@ def create_fit_file(
         # Absolute fallback: Genereer standaard DUUR workout van 60 minuten
         workout_type = "DUUR"
         duration_minutes = 60
-        workout_data = generate_workout(workout_type, duration_minutes)
+        workout_data = generate_workout(
+            workout_type,
+            duration_minutes,
+            user_preferences=user_preferences,
+            sport=sport
+        )
         workout_steps = workout_data["steps"]
         workout_name = workout_data["name"]
 
     duration_type_map = {
         'time': WorkoutStepDuration.TIME,
         'distance': WorkoutStepDuration.DISTANCE,
-        # ... (other mappings)
     }
 
     target_type_map = {
         'speed': WorkoutStepTarget.SPEED,
         'heart_rate': WorkoutStepTarget.HEART_RATE,
+        'power': WorkoutStepTarget.POWER,
+        'cadence': WorkoutStepTarget.CADENCE,
         'open': WorkoutStepTarget.OPEN,
-        # ... (other mappings)
     }
 
     try:
