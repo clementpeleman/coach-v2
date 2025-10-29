@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import StructuredTool
 from app.tools.garmin_tools import get_health_data, get_user_info
 from app.tools.workout_tools import create_fit_file, list_available_workouts
-from app.tools.date_tools import get_current_date
+from app.tools.date_tools import get_current_date as get_current_date_tool
 from app.tools.profiling_tools import analyze_and_summarize_user_activities
 from app.tools.user_tools import delete_user_data
 from app.tools.recovery_tools import assess_recovery_status
@@ -37,7 +37,7 @@ class CreateFitFileArgs(BaseModel):
     workout_steps: Optional[List[Dict]] = Field(default=None, description="A list of workout steps for fully custom workouts. Usually not needed.")
     workout_type: Optional[str] = Field(default=None, description="Type of workout: HERSTEL, DUUR, THRESHOLD, VO2MAX, or SPRINT. Required for dynamic generation.")
     duration_minutes: Optional[int] = Field(default=None, description="Desired duration in minutes (e.g., 45, 60, 75). Any duration within reasonable range is possible.")
-    sport: Optional[str] = Field(default=None, description="Optional sport type: WALKING, RUNNING, CYCLING, LAP_SWIMMING. Leave empty for auto-detect (HERSTEL→WALKING, others→CYCLING) or detect from user keywords.")
+    sport: Optional[str] = Field(default=None, description="Optional sport type: CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING. Leave empty for auto-detect (HERSTEL→CARDIO_TRAINING, others→CYCLING) or detect from user keywords.")
     recovery_score: Optional[float] = Field(default=None, description="Recovery score before workout (0-6)")
 
 class SaveWorkoutPreferencesArgs(BaseModel):
@@ -52,13 +52,19 @@ class GetWorkoutHistoryArgs(BaseModel):
 class UploadWorkoutToGarminArgs(BaseModel):
     workout_type: str = Field(description="Type of workout to upload: HERSTEL, DUUR, THRESHOLD, VO2MAX, or SPRINT")
     duration_minutes: int = Field(description="Duration in minutes (e.g., 45, 60, 75)")
-    sport: Optional[str] = Field(default=None, description="Optional Garmin sport type: WALKING, RUNNING, CYCLING, LAP_SWIMMING, etc. Auto-detected if not specified (HERSTEL=WALKING, others=CYCLING)")
+    sport: Optional[str] = Field(default=None, description="Optional Garmin sport type: CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING, etc. Auto-detected if not specified (HERSTEL=CARDIO_TRAINING, others=CYCLING)")
     schedule_date: Optional[str] = Field(default=None, description="Optional date to schedule workout (YYYY-MM-DD format)")
 
-def create_conversational_agent(user_id: int):
+def create_conversational_agent(user_id: int, current_date: str = None):
     """
     Creates a conversational agent for a user.
+
+    Args:
+        user_id: The Telegram user ID
+        current_date: Current date in ISO format (YYYY-MM-DD). If None, will be fetched automatically.
     """
+    if current_date is None:
+        current_date = get_current_date_tool()
 
     # Helper functions to pass user_id to the tools
     def get_health_data_for_user(data_types: List[str], start_date: str, end_date: Optional[str] = None, days: Optional[int] = None) -> str:
@@ -132,7 +138,7 @@ def create_conversational_agent(user_id: int):
     tools = [
         StructuredTool.from_function(
             name="get_current_date",
-            func=get_current_date,
+            func=get_current_date_tool,
             description="Returns the current date in ISO format (YYYY-MM-DD).",
         ),
         StructuredTool.from_function(
@@ -179,15 +185,15 @@ def create_conversational_agent(user_id: int):
             - SPRINT: Maximale korte inspanningen
 
             SPORT PARAMETER (OPTIONEEL):
-            - Laat LEEG voor auto-detect (HERSTEL→WALKING, anderen→CYCLING)
+            - Laat LEEG voor auto-detect (HERSTEL→CARDIO_TRAINING, anderen→CYCLING)
             - Geef EXPLICIET mee als gebruiker specifieke sport noemt:
-              * "wandelen", "wandeling" → sport="WALKING"
+              * "wandelen", "wandeling" → sport="CARDIO_TRAINING"
               * "hardlopen", "rennen", "lopen" → sport="RUNNING"
               * "fietsen", "fietsrit" → sport="CYCLING"
               * "zwemmen" → sport="LAP_SWIMMING"
 
             VOORBEELDEN:
-            - workout_type="HERSTEL", duration_minutes=45 → Auto WALKING (wandelen)
+            - workout_type="HERSTEL", duration_minutes=45 → Auto CARDIO_TRAINING (wandelen)
             - workout_type="HERSTEL", duration_minutes=45, sport="RUNNING" → Hardlopen
             - workout_type="HERSTEL", duration_minutes=45, sport="CYCLING" → Fietsen
             - workout_type="DUUR", duration_minutes=60, sport="RUNNING" → Hardlopen
@@ -281,16 +287,16 @@ def create_conversational_agent(user_id: int):
             - Workout wordt dynamisch gegenereerd en geupload
             - Sync automatisch naar Garmin horloge
             - Geen handmatige download nodig
-            - Sport type wordt AUTO-DETECT (HERSTEL=WALKING/wandelen, anderen=CYCLING/fietsen)
+            - Sport type wordt AUTO-DETECT (HERSTEL=CARDIO_TRAINING/wandelen, anderen=CYCLING/fietsen)
 
             Parameters:
             - workout_type: TYPE van workout (HERSTEL, DUUR, THRESHOLD, VO2MAX, SPRINT)
             - duration_minutes: DUUR in minuten
-            - sport: OPTIONEEL - override auto-detect (WALKING, RUNNING, CYCLING, LAP_SWIMMING, etc.)
+            - sport: OPTIONEEL - override auto-detect (CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING, etc.)
             - schedule_date: Optioneel - plan workout op datum (YYYY-MM-DD)
 
             Voorbeelden:
-            - workout_type="HERSTEL", duration_minutes=45 → Auto: WALKING (wandelen)
+            - workout_type="HERSTEL", duration_minutes=45 → Auto: CARDIO_TRAINING (wandelen)
             - workout_type="HERSTEL", duration_minutes=30, sport="RUNNING" → Hardlopen
             - workout_type="DUUR", duration_minutes=75 → Auto: CYCLING (fietsen)
             - workout_type="THRESHOLD", duration_minutes=50, sport="RUNNING" → Hardlopen
@@ -324,7 +330,10 @@ def create_conversational_agent(user_id: int):
 
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", """Je bent een behulpzame AI sportcoach. Je helpt gebruikers met hun activiteiten, slaap, stress en het maken van trainingsplannen.
+            ("system", f"""Je bent een behulpzame AI sportcoach. Je helpt gebruikers met hun activiteiten, slaap, stress en het maken van trainingsplannen.
+
+HUIDIGE DATUM: {current_date}
+Het is nu {current_date}. Gebruik deze datum als referentie voor alle datum-gerelateerde vragen en data requests.
 
 BELANGRIJKE TAALINSTELLINGEN:
 - Antwoord ALTIJD in het Nederlands

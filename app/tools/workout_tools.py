@@ -25,7 +25,7 @@ def create_fit_file(
         workout_steps: List of workout steps (optional, for custom workouts)
         workout_type: Type of workout (HERSTEL, DUUR, THRESHOLD, VO2MAX, SPRINT)
         duration_minutes: Desired duration in minutes
-        sport: Sport type (WALKING, RUNNING, CYCLING, LAP_SWIMMING, etc.) - auto-detect if None (HERSTEL→WALKING, others→CYCLING)
+        sport: Sport type (CARDIO_TRAINING, RUNNING, CYCLING, LAP_SWIMMING, etc.) - auto-detect if None (HERSTEL→CARDIO_TRAINING, others→CYCLING)
         recovery_score: Recovery score before workout (for history tracking)
 
     Each step should be a dictionary with keys:
@@ -212,7 +212,7 @@ def list_available_workouts() -> str:
     lines.append("")
     lines.append("  WANDELEN:")
     lines.append("    Keywords: wandelen, wandeling, walking")
-    lines.append("    Garmin type: WALKING")
+    lines.append("    Garmin type: CARDIO_TRAINING")
     lines.append("    Voorbeelden:")
     lines.append("      - 'HERSTEL wandeling van 45 minuten'")
     lines.append("      - 'DUUR wandeling van 60 minuten'")
@@ -248,15 +248,15 @@ def list_available_workouts() -> str:
     lines.append("      - 'DUUR zwemmen van 45 minuten'")
     lines.append("")
     lines.append("ALGEMENE VOORBEELDEN:")
-    lines.append("  - 'Maak een HERSTEL workout van 45 minuten' → Auto WALKING")
+    lines.append("  - 'Maak een HERSTEL workout van 45 minuten' → Auto CARDIO_TRAINING")
     lines.append("  - 'Maak een DUUR workout van 75 minuten' → Auto CYCLING")
     lines.append("  - 'Ik wil een THRESHOLD sessie van 50 minuten op zwift' → CYCLING")
-    lines.append("  - 'Geef me een HERSTEL wandeling van 45 minuten' → WALKING")
+    lines.append("  - 'Geef me een HERSTEL wandeling van 45 minuten' → CARDIO_TRAINING")
     lines.append("  - 'Geef me een HERSTEL hardloop sessie van 30 minuten' → RUNNING")
     lines.append("  - 'Plan een VO2MAX gravelrit van 60 minuten' → CYCLING")
     lines.append("")
     lines.append("AUTO-DETECT:")
-    lines.append("  - HERSTEL zonder sport specificatie → WALKING (wandelen)")
+    lines.append("  - HERSTEL zonder sport specificatie → CARDIO_TRAINING (wandelen)")
     lines.append("  - DUUR/THRESHOLD/VO2MAX/SPRINT zonder sport → CYCLING (fietsen)")
     lines.append("  - Keywords in tekst overschrijven auto-detect")
 

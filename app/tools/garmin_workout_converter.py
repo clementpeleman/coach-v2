@@ -20,7 +20,7 @@ INTENSITY_MAP = {
 
 # Mapping van workout types naar Garmin sport types
 SPORT_MAP = {
-    "HERSTEL": "WALKING",  # Default naar walking (laag-intensiteit herstel)
+    "HERSTEL": "CARDIO_TRAINING",  # Default naar cardio training (laag-intensiteit herstel)
     "DUUR": "CYCLING",  # Default naar cycling, kan later aangepast worden
     "THRESHOLD": "CYCLING",
     "VO2MAX": "CYCLING",

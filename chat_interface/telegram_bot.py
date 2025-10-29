@@ -264,15 +264,16 @@ async def garmin_sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         await update.message.reply_text(
-            "⏳ Controleren op recent gesynchroniseerde data...\n\n"
-            "Let op: Dit commando haalt alleen data op die je Garmin apparaat "
-            "recent heeft gesynchroniseerd naar Garmin Connect.\n\n"
-            "Voor historische data, gebruik: `/garmin_backfill <dagen>`"
+            "⏳ Controleren database voor recent ontvangen data...\n\n"
+            "📌 **Hoe Garmin data werkt:**\n"
+            "• Data komt automatisch binnen via webhooks wanneer je sync't\n"
+            "• Dit commando toont wat er AL in de database staat\n"
+            "• Voor historische data, gebruik: `/garmin_backfill <dagen>`"
         )
 
-        # Fetch recently uploaded data (last hour)
+        # Fetch data from database (populated by webhooks)
         client = GarminAPIClient(db, user_id)
-        data = client.get_recent_data(days=1)  # Check last 24 hours of uploads
+        data = client.get_recent_data(days=7)  # Check last 7 days in database
 
         # Prepare summary
         num_dailies = len(data.get('dailies', []))
@@ -282,13 +283,15 @@ async def garmin_sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if num_dailies == 0 and num_sleeps == 0 and num_activities == 0 and num_stress == 0:
             await update.message.reply_text(
-                "📭 Geen nieuwe data gevonden\n\n"
-                "Dit betekent dat je Garmin apparaat de afgelopen 24 uur "
-                "niet heeft gesynchroniseerd met Garmin Connect.\n\n"
-                "Wat kun je doen:\n"
-                "1. Open de Garmin Connect app en synchroniseer je apparaat\n"
-                "2. Gebruik `/garmin_backfill 30` om de laatste 30 dagen op te halen\n"
-                "3. Wacht op automatische webhooks (gebeurt bij elke sync)"
+                "📭 Geen data gevonden in database\n\n"
+                "Dit kan betekenen:\n"
+                "• Je hebt nog niet gesynchroniseerd sinds het verbinden\n"
+                "• De webhooks zijn nog niet geconfigureerd\n\n"
+                "**Wat kun je doen:**\n"
+                "1. Synchroniseer je Garmin apparaat met Garmin Connect app\n"
+                "2. Wacht 1-2 minuten op webhooks\n"
+                "3. Voor oude data: `/garmin_backfill 30` (triggert webhooks)\n\n"
+                "💡 Data wordt automatisch binnen gehaald bij elke sync!"
             )
         else:
             await update.message.reply_text(
@@ -445,7 +448,10 @@ async def conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if "chat_history" not in context.user_data:
         context.user_data["chat_history"] = []
 
-    agent_executor = create_conversational_agent(user_id)
+    # Get current date for each message to ensure accuracy
+    current_date = datetime.date.today().isoformat()
+
+    agent_executor = create_conversational_agent(user_id, current_date=current_date)
 
     result = agent_executor.invoke({"input": message, "chat_history": context.user_data["chat_history"]})
 
@@ -477,10 +483,12 @@ def main() -> None:
 
     # Garmin OAuth commands
     application.add_handler(CommandHandler("garmin_connect", garmin_connect_command))
+    application.add_handler(CommandHandler("garmin_auth", garmin_connect_command))  # Alias
     application.add_handler(CommandHandler("garmin_status", garmin_status_command))
     application.add_handler(CommandHandler("garmin_backfill", garmin_backfill_command))
     application.add_handler(CommandHandler("garmin_sync", garmin_sync_command))
     application.add_handler(CommandHandler("garmin_disconnect", garmin_disconnect_command))
+    application.add_handler(CommandHandler("garmin_deauth", garmin_disconnect_command))  # Alias
 
     application.add_handler(CallbackQueryHandler(button))
 

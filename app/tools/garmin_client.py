@@ -80,7 +80,13 @@ class GarminAPIClient:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
-            logger.error(f"Garmin API request failed: {e}")
+            # Check if it's a 400/403 error (likely permission/scope issue)
+            if e.response.status_code in [400, 403]:
+                logger.error(f"Garmin API request failed with status {e.response.status_code}: {e}")
+                logger.error(f"This may indicate missing OAuth scopes. Required: HEALTH_EXPORT ACTIVITY_EXPORT")
+                logger.error(f"URL: {url}, Params: {params}")
+            else:
+                logger.error(f"Garmin API request failed: {e}")
             raise Exception(f"Garmin API error: {e}")
 
     def _store_health_data(
@@ -192,6 +198,10 @@ class GarminAPIClient:
 
     # =========================================================================
     # HEALTH DATA METHODS
+    # NOTE: These methods are DEPRECATED for ad-hoc use!
+    # Garmin APIs do NOT support direct REST API calls without webhook notifications.
+    # These methods will return 400 Bad Request when called directly.
+    # Only use these internally when processing webhook notifications.
     # =========================================================================
 
     def get_dailies(
@@ -202,6 +212,9 @@ class GarminAPIClient:
     ) -> List[Dict]:
         """
         Fetch daily summaries.
+
+        DEPRECATED: Do not call directly! This will fail with 400 Bad Request.
+        Only used internally by webhook handlers.
 
         Args:
             start_time: Start time in Unix timestamp (seconds)
@@ -475,20 +488,24 @@ class GarminAPIClient:
 
     def get_recent_data(self, days: int = 7):
         """
-        Fetch recent health and activity data for the user.
+        Fetch recent health and activity data for the user from DATABASE.
 
-        Note: Garmin API uploadStartTime/uploadEndTime parameters query by when data
-        was SYNCED to Garmin Connect, not when the activity occurred.
+        NOTE: Garmin APIs do not support ad-hoc REST API calls. Data is delivered
+        via webhooks/push notifications only. This method reads from the local database
+        which is populated by webhook handlers.
 
-        This method checks the last N days of UPLOAD activity (not activity dates).
-        For historical data, use backfill endpoints instead.
+        For historical data that hasn't arrived yet, use backfill endpoints which
+        will trigger webhook deliveries.
 
         Args:
-            days: Number of days of upload history to check (default: 7)
+            days: Number of days to look back in database (default: 7)
 
         Returns:
-            Dict with health and activity data
+            Dict with health and activity data from database
         """
+        from app.database.models import GarminHealthData, GarminActivityData
+        import json
+
         result = {
             "dailies": [],
             "sleeps": [],
@@ -496,34 +513,37 @@ class GarminAPIClient:
             "stress": []
         }
 
-        # Split into 24-hour chunks to respect API limits
-        now = datetime.utcnow()
-        for i in range(days):
-            day_end = now - timedelta(days=i)
-            day_start = now - timedelta(days=i+1)
+        # Calculate date range
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
 
-            end_timestamp = int(day_end.timestamp())
-            start_timestamp = int(day_start.timestamp())
+        # Fetch health data from database
+        health_data = self.db.query(GarminHealthData).filter(
+            GarminHealthData.user_id == self.telegram_user_id,
+            GarminHealthData.created_at >= cutoff_date
+        ).all()
 
-            # Fetch each type for this 24-hour window
-            try:
-                result["dailies"].extend(self.get_dailies(start_timestamp, end_timestamp))
-            except:
-                pass
+        for record in health_data:
+            data = json.loads(record.data) if isinstance(record.data, str) else record.data
 
-            try:
-                result["sleeps"].extend(self.get_sleeps(start_timestamp, end_timestamp))
-            except:
-                pass
+            if record.summary_type == 'dailies':
+                result["dailies"].append(data)
+            elif record.summary_type == 'sleeps':
+                result["sleeps"].append(data)
+            elif record.summary_type == 'stressDetails':
+                result["stress"].append(data)
 
-            try:
-                result["activities"].extend(self.get_activities(start_timestamp, end_timestamp))
-            except:
-                pass
+        # Fetch activity data from database
+        activity_data = self.db.query(GarminActivityData).filter(
+            GarminActivityData.user_id == self.telegram_user_id,
+            GarminActivityData.created_at >= cutoff_date
+        ).all()
 
-            try:
-                result["stress"].extend(self.get_stress_details(start_timestamp, end_timestamp))
-            except:
-                pass
+        for record in activity_data:
+            data = json.loads(record.data) if isinstance(record.data, str) else record.data
+            result["activities"].append(data)
+
+        logger.info(f"Retrieved from database: {len(result['dailies'])} dailies, "
+                   f"{len(result['sleeps'])} sleeps, {len(result['activities'])} activities, "
+                   f"{len(result['stress'])} stress records")
 
         return result

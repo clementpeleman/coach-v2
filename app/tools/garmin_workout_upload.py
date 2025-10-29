@@ -25,7 +25,7 @@ def upload_workout_to_garmin(
         user_id: Telegram user ID
         workout_type: Type workout (HERSTEL, DUUR, THRESHOLD, VO2MAX, SPRINT)
         duration_minutes: Gewenste duur in minuten
-        sport: Garmin sport type (WALKING, RUNNING, CYCLING, etc.) - Auto-detect if None (HERSTEL→WALKING, others→CYCLING)
+        sport: Garmin sport type (CARDIO_TRAINING, RUNNING, CYCLING, etc.) - Auto-detect if None (HERSTEL→CARDIO_TRAINING, others→CYCLING)
         schedule_date: Optioneel - plan workout op datum (YYYY-MM-DD format)
 
     Returns:

@@ -7,9 +7,9 @@ import random
 
 # Sport type mapping - Maps Nederlandse keywords naar Garmin sport types
 SPORT_KEYWORDS = {
-    "wandelen": "WALKING",
-    "wandeling": "WALKING",
-    "walking": "WALKING",
+    "wandelen": "CARDIO_TRAINING",
+    "wandeling": "CARDIO_TRAINING",
+    "walking": "CARDIO_TRAINING",
     "lopen": "RUNNING",
     "hardlopen": "RUNNING",
     "rennen": "RUNNING",
@@ -35,7 +35,7 @@ WORKOUT_RECIPES = {
     "HERSTEL": {
         "description": "Actief herstel op zeer lage intensiteit",
         "intensity_level": 1,
-        "default_sport": "WALKING",  # Wandelen (laag intensiteit herstel)
+        "default_sport": "CARDIO_TRAINING",  # Wandelen (laag intensiteit herstel)
         "structure": {
             "warmup_percent": 0,  # Direct starten
             "cooldown_percent": 0,  # Direct stoppen

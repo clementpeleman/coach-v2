@@ -1,0 +1,12 @@
+● docker.service - Docker Application Container Engine
+     Loaded: loaded (]8;;file://ubuntu-4gb-nbg1-1/usr/lib/systemd/system/docker.service/usr/lib/systemd/system/docker.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: activating (auto-restart) (Result: exit-code) since Mon 2025-10-27 21:12:11 UTC; 1s ago
+TriggeredBy: [0;1;32m●[0m docker.socket
+       Docs: ]8;;https://docs.docker.comhttps://docs.docker.com]8;;
+    Process: 6228 ExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock [0;1;31m(code=exited, status=1/FAILURE)[0m
+   Main PID: 6228 (code=exited, status=1/FAILURE)
+        CPU: 60ms
+
+Oct 27 21:12:11 ubuntu-4gb-nbg1-1 systemd[1]: [0;1;39m[0;1;31m[0;1;39mdocker.service: Main process exited, code=exited, status=1/FAILURE[0m
+Oct 27 21:12:11 ubuntu-4gb-nbg1-1 systemd[1]: [0;1;38;5;185m[0;1;39m[0;1;38;5;185mdocker.service: Failed with result 'exit-code'.[0m
+Oct 27 21:12:11 ubuntu-4gb-nbg1-1 systemd[1]: [0;1;31m[0;1;39m[0;1;31mFailed to start docker.service - Docker Application Container Engine.[0m
