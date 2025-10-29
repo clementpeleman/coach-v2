@@ -707,6 +707,13 @@ async def conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     context.user_data["chat_history"].append(AIMessage(content=result["output"]))
 
+    # Limit chat history to last 20 messages (10 exchanges) to prevent context bleeding
+    # This prevents old workout requests or conversations from interfering with new questions
+    MAX_HISTORY_MESSAGES = 20
+    if len(context.user_data["chat_history"]) > MAX_HISTORY_MESSAGES:
+        context.user_data["chat_history"] = context.user_data["chat_history"][-MAX_HISTORY_MESSAGES:]
+        logger.debug(f"Trimmed chat history to last {MAX_HISTORY_MESSAGES} messages")
+
     # Check for recovery warning in the output
     output_lower = result["output"].lower()
     is_recovery_warning = (
