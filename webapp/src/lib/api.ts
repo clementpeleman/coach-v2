@@ -23,6 +23,13 @@ export type GarminActivity = {
   manual: boolean;
 };
 
+export type WebUser = {
+  user_id: number;
+  email?: string;
+  display_name?: string;
+  garmin_connected?: boolean;
+};
+
 export type WeeklyAnalysis = {
   window: {
     current_start: string;
@@ -77,4 +84,51 @@ export async function fetchGarminActivities(
 
 export async function fetchWeeklyAnalysis(userId: number): Promise<WeeklyAnalysis> {
   return getJson<WeeklyAnalysis>(`/garmin/analysis/weekly?user_id=${userId}`);
+}
+
+export async function loginWebUser(email: string, displayName?: string): Promise<{
+  user_id: number;
+  email: string;
+  display_name?: string;
+  created: boolean;
+}> {
+  const response = await fetch(`${API_URL}/web/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email,
+      display_name: displayName || null,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Login failed (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchWebUser(userId: number): Promise<WebUser> {
+  return getJson<WebUser>(`/web/auth/me?user_id=${userId}`);
+}
+
+export async function sendChatMessage(payload: {
+  userId: number;
+  message: string;
+  history: Array<{ role: "user" | "assistant"; content: string }>;
+}): Promise<{ reply: string }> {
+  const response = await fetch(`${API_URL}/web/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: payload.userId,
+      message: payload.message,
+      history: payload.history,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Chat failed (${response.status}): ${body}`);
+  }
+
+  return response.json();
 }
