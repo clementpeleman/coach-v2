@@ -1,10 +1,19 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.api import garmin
 
 app = FastAPI(
     title="Coach Bot API",
-    description="API for Telegram coaching bot with Garmin integration",
+    description="API for web-based coaching app with Garmin integration",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include Garmin OAuth and webhook routes
@@ -19,6 +28,7 @@ def read_root():
             "garmin_auth_callback": "/garmin/auth/callback",
             "garmin_auth_status": "/garmin/auth/status",
             "garmin_disconnect": "/garmin/auth/disconnect",
+            "garmin_activities": "/garmin/activities",
             "health_webhook": "/garmin/webhook/health",
             "activity_webhook": "/garmin/webhook/activity"
         }

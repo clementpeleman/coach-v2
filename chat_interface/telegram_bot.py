@@ -191,7 +191,7 @@ async def garmin_connect_command(update: Update, context: ContextTypes.DEFAULT_T
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 f"{api_url}/garmin/auth/start",
-                params={"telegram_user_id": user_id},
+                params={"user_id": user_id},
                 timeout=10.0
             )
 

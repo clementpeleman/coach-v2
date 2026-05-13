@@ -254,7 +254,7 @@ class GarminOAuthService:
     def store_tokens(
         self,
         db: Session,
-        telegram_user_id: int,
+        user_id: int,
         token_data: Dict
     ) -> GarminToken:
         """
@@ -262,7 +262,7 @@ class GarminOAuthService:
 
         Args:
             db: Database session
-            telegram_user_id: Telegram user ID
+            user_id: Internal user ID
             token_data: Dict from token exchange/refresh
 
         Returns:
@@ -270,11 +270,11 @@ class GarminOAuthService:
         """
         # First get or create user profile
         user_profile = db.query(UserProfile).filter(
-            UserProfile.user_id == telegram_user_id
+            UserProfile.user_id == user_id
         ).first()
 
         if not user_profile:
-            user_profile = UserProfile(user_id=telegram_user_id)
+            user_profile = UserProfile(user_id=user_id)
             db.add(user_profile)
             db.flush()
 
@@ -298,7 +298,7 @@ class GarminOAuthService:
 
         # Check if token already exists
         garmin_token = db.query(GarminToken).filter(
-            GarminToken.user_id == telegram_user_id
+            GarminToken.user_id == user_id
         ).first()
 
         if garmin_token:
@@ -314,7 +314,7 @@ class GarminOAuthService:
         else:
             # Create new token
             garmin_token = GarminToken(
-                user_id=telegram_user_id,
+                user_id=user_id,
                 garmin_user_id=garmin_user_id,
                 access_token=encrypted_access,
                 refresh_token=encrypted_refresh,
@@ -330,13 +330,13 @@ class GarminOAuthService:
 
         return garmin_token
 
-    def get_valid_access_token(self, db: Session, telegram_user_id: int) -> Optional[str]:
+    def get_valid_access_token(self, db: Session, user_id: int) -> Optional[str]:
         """
         Get a valid access token, refreshing if necessary.
 
         Args:
             db: Database session
-            telegram_user_id: Telegram user ID
+            user_id: Internal user ID
 
         Returns:
             Valid access token or None if no token exists
@@ -345,7 +345,7 @@ class GarminOAuthService:
             Exception: If token refresh fails
         """
         garmin_token = db.query(GarminToken).filter(
-            GarminToken.user_id == telegram_user_id
+            GarminToken.user_id == user_id
         ).first()
 
         if not garmin_token:
@@ -361,7 +361,7 @@ class GarminOAuthService:
             new_token_data = self.refresh_access_token(refresh_token)
 
             # Store the new tokens
-            self.store_tokens(db, telegram_user_id, new_token_data)
+            self.store_tokens(db, user_id, new_token_data)
 
             return new_token_data['access_token']
         else:
@@ -369,15 +369,15 @@ class GarminOAuthService:
             encrypted_access = garmin_token.access_token
             return self.decrypt_token(encrypted_access)
 
-    def delete_tokens(self, db: Session, telegram_user_id: int):
+    def delete_tokens(self, db: Session, user_id: int):
         """
         Delete stored tokens for a user.
 
         Args:
             db: Database session
-            telegram_user_id: Telegram user ID
+            user_id: Internal user ID
         """
         db.query(GarminToken).filter(
-            GarminToken.user_id == telegram_user_id
+            GarminToken.user_id == user_id
         ).delete()
         db.commit()

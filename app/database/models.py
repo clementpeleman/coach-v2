@@ -106,7 +106,7 @@ class OAuthSession(Base):
 
     state = Column(String, primary_key=True)
     code_verifier = Column(String, nullable=False)
-    telegram_user_id = Column(BigInteger, nullable=False)
+    user_id = Column(BigInteger, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 class WorkoutPreferences(Base):

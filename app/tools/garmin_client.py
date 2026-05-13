@@ -38,18 +38,18 @@ class GarminAPIClient:
     BACKFILL_DAILIES_URL = "https://apis.garmin.com/wellness-api/rest/backfill/dailies"
     BACKFILL_ACTIVITIES_URL = "https://apis.garmin.com/wellness-api/rest/backfill/activities"
 
-    def __init__(self, db: Session, telegram_user_id: int):
+    def __init__(self, db: Session, user_id: int):
         """
         Initialize Garmin API client.
 
         Args:
             db: Database session
-            telegram_user_id: Telegram user ID
+            user_id: Internal user ID
         """
         self.db = db
-        self.telegram_user_id = telegram_user_id
+        self.user_id = user_id
         self.oauth_service = GarminOAuthService()
-        self.access_token = self.oauth_service.get_valid_access_token(db, telegram_user_id)
+        self.access_token = self.oauth_service.get_valid_access_token(db, user_id)
 
         if not self.access_token:
             raise Exception("No valid Garmin access token found for user")
@@ -131,7 +131,7 @@ class GarminAPIClient:
             else:
                 # Create new record
                 health_data = GarminHealthData(
-                    user_id=self.telegram_user_id,
+                    user_id=self.user_id,
                     summary_id=summary_id,
                     summary_type=summary_type,
                     calendar_date=summary.get('calendarDate'),
@@ -176,7 +176,7 @@ class GarminAPIClient:
             else:
                 # Create new record
                 activity_data = GarminActivityData(
-                    user_id=self.telegram_user_id,
+                    user_id=self.user_id,
                     summary_id=summary_id,
                     activity_id=summary.get('activityId'),
                     activity_type=summary.get('activityType'),
@@ -518,7 +518,7 @@ class GarminAPIClient:
 
         # Fetch health data from database
         health_data = self.db.query(GarminHealthData).filter(
-            GarminHealthData.user_id == self.telegram_user_id,
+            GarminHealthData.user_id == self.user_id,
             GarminHealthData.created_at >= cutoff_date
         ).all()
 
@@ -534,7 +534,7 @@ class GarminAPIClient:
 
         # Fetch activity data from database
         activity_data = self.db.query(GarminActivityData).filter(
-            GarminActivityData.user_id == self.telegram_user_id,
+            GarminActivityData.user_id == self.user_id,
             GarminActivityData.created_at >= cutoff_date
         ).all()
 

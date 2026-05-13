@@ -24,18 +24,18 @@ class GarminTrainingAPIClient:
 
     PERMISSIONS_URL = "https://apis.garmin.com/userPermissions/"
 
-    def __init__(self, db: Session, telegram_user_id: int):
+    def __init__(self, db: Session, user_id: int):
         """
         Initialize Garmin Training API client.
 
         Args:
             db: Database session
-            telegram_user_id: Telegram user ID
+            user_id: Internal user ID
         """
         self.db = db
-        self.telegram_user_id = telegram_user_id
+        self.user_id = user_id
         self.oauth_service = GarminOAuthService()
-        self.access_token = self.oauth_service.get_valid_access_token(db, telegram_user_id)
+        self.access_token = self.oauth_service.get_valid_access_token(db, user_id)
 
         if not self.access_token:
             raise Exception("No valid Garmin access token found for user")

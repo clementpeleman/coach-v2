@@ -5,22 +5,32 @@ from typing import Dict, Optional
 import logging
 import requests
 import time
+import json
 from datetime import datetime, timedelta
 
 from app.config import settings
 from app.database.database import get_db
 from app.tools.garmin_oauth import GarminOAuthService
 from app.tools.garmin_client import GarminAPIClient
-from app.database.models import GarminToken, OAuthSession
+from app.database.models import GarminActivityData, GarminToken, OAuthSession
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/garmin", tags=["garmin"])
 
 
+def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> int:
+    """Resolve internal user id while supporting legacy query parameter names."""
+    resolved_user_id = user_id if user_id is not None else telegram_user_id
+    if resolved_user_id is None:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    return resolved_user_id
+
+
 @router.get("/auth/start")
 async def start_oauth(
-    telegram_user_id: int = Query(..., description="Telegram user ID"),
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     db: Session = Depends(get_db)
 ):
     """
@@ -47,13 +57,14 @@ async def start_oauth(
         # Generate authorization URL
         auth_url, code_verifier, state = oauth_service.get_authorization_url(redirect_uri)
 
-        logger.info(f"[OAuth Start] Generated state: {state} for user: {telegram_user_id}")
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        logger.info(f"[OAuth Start] Generated state: {state} for user: {resolved_user_id}")
 
         # Store session data in the database
         new_session = OAuthSession(
             state=state,
             code_verifier=code_verifier,
-            telegram_user_id=telegram_user_id
+            user_id=resolved_user_id
         )
         db.add(new_session)
         db.commit()
@@ -105,7 +116,7 @@ async def oauth_callback(
 
         # Retrieve data and delete session
         code_verifier = session.code_verifier
-        telegram_user_id = session.telegram_user_id
+        user_id = session.user_id
         db.delete(session)
         db.commit()
 
@@ -123,7 +134,7 @@ async def oauth_callback(
         )
 
         # Store tokens in database
-        garmin_token = oauth_service.store_tokens(db, telegram_user_id, token_data)
+        garmin_token = oauth_service.store_tokens(db, user_id, token_data)
 
         # Get user permissions
         access_token = token_data['access_token']
@@ -188,7 +199,7 @@ async def oauth_callback(
                 <div class="success-icon"></div>
                 <h1>Succesvol verbonden!</h1>
                 <p>Je Garmin account is succesvol gekoppeld.</p>
-                <p>Je kunt dit venster nu sluiten en teruggaan naar de Telegram bot.</p>
+                <p>Je kunt dit venster nu sluiten en teruggaan naar de webapp.</p>
                 <button class="close-btn" onclick="window.close()">Sluit venster</button>
             </div>
         </body>
@@ -203,13 +214,15 @@ async def oauth_callback(
 
 @router.get("/auth/status")
 async def check_auth_status(
-    telegram_user_id: int = Query(..., description="Telegram user ID"),
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     db: Session = Depends(get_db)
 ):
     """Check if user has valid Garmin authentication."""
     try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         oauth_service = GarminOAuthService()
-        access_token = oauth_service.get_valid_access_token(db, telegram_user_id)
+        access_token = oauth_service.get_valid_access_token(db, resolved_user_id)
 
         if not access_token:
             return {
@@ -222,7 +235,7 @@ async def check_auth_status(
 
         # Get token info
         garmin_token = db.query(GarminToken).filter(
-            GarminToken.user_id == telegram_user_id
+            GarminToken.user_id == resolved_user_id
         ).first()
 
         return {
@@ -239,15 +252,17 @@ async def check_auth_status(
 
 @router.delete("/auth/disconnect")
 async def disconnect_garmin(
-    telegram_user_id: int = Query(..., description="Telegram user ID"),
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     db: Session = Depends(get_db)
 ):
     """Disconnect Garmin account and delete stored tokens."""
     try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         oauth_service = GarminOAuthService()
 
         # Get current access token
-        access_token = oauth_service.get_valid_access_token(db, telegram_user_id)
+        access_token = oauth_service.get_valid_access_token(db, resolved_user_id)
 
         if access_token:
             # Deregister from Garmin API
@@ -257,7 +272,7 @@ async def disconnect_garmin(
                 logger.warning(f"Garmin deregistration failed: {e}")
 
         # Delete local tokens
-        oauth_service.delete_tokens(db, telegram_user_id)
+        oauth_service.delete_tokens(db, resolved_user_id)
 
         return {
             "status": "success",
@@ -275,7 +290,8 @@ async def disconnect_garmin(
 
 @router.get("/data/recent")
 async def get_recent_data(
-    telegram_user_id: int = Query(..., description="Telegram user ID"),
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     days: int = Query(7, description="Number of days to fetch", ge=1, le=90),
     db: Session = Depends(get_db)
 ):
@@ -285,7 +301,8 @@ async def get_recent_data(
     This manually fetches data from Garmin API instead of waiting for webhooks.
     """
     try:
-        client = GarminAPIClient(db, telegram_user_id)
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        client = GarminAPIClient(db, resolved_user_id)
         data = client.get_recent_data(days=days)
 
         return {
@@ -299,9 +316,50 @@ async def get_recent_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/activities")
+async def list_activities(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    limit: int = Query(20, ge=1, le=200, description="Maximum activities to return"),
+    db: Session = Depends(get_db)
+):
+    """List recent Garmin activities stored for a user."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        activities = db.query(GarminActivityData).filter(
+            GarminActivityData.user_id == resolved_user_id
+        ).order_by(GarminActivityData.start_time.desc()).limit(limit).all()
+
+        return {
+            "activities": [
+                {
+                    "id": activity.id,
+                    "summary_id": activity.summary_id,
+                    "activity_id": activity.activity_id,
+                    "activity_type": activity.activity_type,
+                    "activity_name": activity.activity_name,
+                    "start_time": activity.start_time.isoformat() if activity.start_time else None,
+                    "duration_seconds": activity.duration,
+                    "distance_meters": activity.distance,
+                    "average_heart_rate": activity.average_heart_rate,
+                    "max_heart_rate": activity.max_heart_rate,
+                    "calories": activity.calories,
+                    "manual": activity.manual,
+                    "raw_data": json.loads(activity.data) if isinstance(activity.data, str) else activity.data,
+                }
+                for activity in activities
+            ],
+            "count": len(activities)
+        }
+    except Exception as e:
+        logger.error(f"List activities failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/data/backfill")
 async def request_backfill(
-    telegram_user_id: int = Query(..., description="Telegram user ID"),
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
     data_type: str = Query(..., description="Type of data", regex="^(dailies|activities|both)$"),
@@ -318,7 +376,8 @@ async def request_backfill(
         start = datetime.strptime(start_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
 
-        client = GarminAPIClient(db, telegram_user_id)
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        client = GarminAPIClient(db, resolved_user_id)
 
         if data_type in ["dailies", "both"]:
             client.backfill_dailies(start, end)
@@ -365,22 +424,22 @@ async def receive_health_webhook(
                 garmin_user_id = item.get('userId')
                 callback_url = item.get('callbackURL')
 
-                # Find the telegram_user_id from garmin_user_id
+                # Resolve internal user_id from garmin_user_id
                 token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
                 if not token:
                     logger.warning(f"No token found for Garmin user {garmin_user_id}")
                     continue
 
-                telegram_user_id = token.user_id
+                user_id = token.user_id
 
                 if not callback_url:
                     # This is a PUSH notification with data included
                     logger.info(f"PUSH notification for {summary_type}, user {garmin_user_id}")
                     # Store PUSH data directly
                     try:
-                        client = GarminAPIClient(db, telegram_user_id)
+                        client = GarminAPIClient(db, user_id)
                         client._store_health_data(summary_type, [item])
-                        logger.info(f"Stored PUSH {summary_type} for user {telegram_user_id}")
+                        logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
                         logger.error(f"Failed to store PUSH data: {e}")
                     continue
@@ -390,7 +449,7 @@ async def receive_health_webhook(
 
                 try:
                     # Fetch data from callback URL using user's access token
-                    client = GarminAPIClient(db, telegram_user_id)
+                    client = GarminAPIClient(db, user_id)
                     response = requests.get(
                         callback_url,
                         headers=client._get_headers()
@@ -402,7 +461,7 @@ async def receive_health_webhook(
 
                         # Store in database
                         client._store_health_data(summary_type, summaries)
-                        logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {telegram_user_id}")
+                        logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
                         logger.error(f"Callback URL returned {response.status_code}: {response.text}")
                 except Exception as e:
@@ -436,22 +495,22 @@ async def receive_activity_webhook(
                 garmin_user_id = item.get('userId')
                 callback_url = item.get('callbackURL')
 
-                # Find the telegram_user_id from garmin_user_id
+                # Resolve internal user_id from garmin_user_id
                 token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
                 if not token:
                     logger.warning(f"No token found for Garmin user {garmin_user_id}")
                     continue
 
-                telegram_user_id = token.user_id
+                user_id = token.user_id
 
                 if not callback_url:
                     # This is a PUSH notification with data included
                     logger.info(f"PUSH notification for {summary_type}, user {garmin_user_id}")
                     # Store PUSH activity data directly
                     try:
-                        client = GarminAPIClient(db, telegram_user_id)
+                        client = GarminAPIClient(db, user_id)
                         client._store_activity_data([item])
-                        logger.info(f"Stored PUSH {summary_type} for user {telegram_user_id}")
+                        logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
                         logger.error(f"Failed to store PUSH activity: {e}")
                     continue
@@ -461,7 +520,7 @@ async def receive_activity_webhook(
 
                 try:
                     # Fetch data from callback URL using user's access token
-                    client = GarminAPIClient(db, telegram_user_id)
+                    client = GarminAPIClient(db, user_id)
                     response = requests.get(
                         callback_url,
                         headers=client._get_headers()
@@ -473,7 +532,7 @@ async def receive_activity_webhook(
 
                         # Store in database
                         client._store_activity_data(summaries)
-                        logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {telegram_user_id}")
+                        logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
                         logger.error(f"Callback URL returned {response.status_code}: {response.text}")
                 except Exception as e:
