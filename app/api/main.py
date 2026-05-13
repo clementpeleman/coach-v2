@@ -29,6 +29,7 @@ def read_root():
             "garmin_auth_status": "/garmin/auth/status",
             "garmin_disconnect": "/garmin/auth/disconnect",
             "garmin_activities": "/garmin/activities",
+            "garmin_weekly_analysis": "/garmin/analysis/weekly",
             "health_webhook": "/garmin/webhook/health",
             "activity_webhook": "/garmin/webhook/activity"
         }

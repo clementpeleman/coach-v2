@@ -27,6 +27,33 @@ def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> 
     return resolved_user_id
 
 
+def summarize_activities(activities: list[GarminActivityData]) -> Dict:
+    """Create aggregate metrics from Garmin activity rows."""
+    total_distance_m = sum((activity.distance or 0.0) for activity in activities)
+    total_duration_s = sum((activity.duration or 0) for activity in activities)
+    hr_values = [activity.average_heart_rate for activity in activities if activity.average_heart_rate]
+
+    running_count = 0
+    cycling_count = 0
+    for activity in activities:
+        activity_type = (activity.activity_type or "").upper()
+        if "RUN" in activity_type:
+            running_count += 1
+        if "CYCLE" in activity_type or "BIKE" in activity_type:
+            cycling_count += 1
+
+    return {
+        "sessions": len(activities),
+        "distance_meters": round(total_distance_m, 2),
+        "distance_km": round(total_distance_m / 1000, 2),
+        "duration_seconds": int(total_duration_s),
+        "duration_hours": round(total_duration_s / 3600, 2),
+        "average_heart_rate": round(sum(hr_values) / len(hr_values), 1) if hr_values else None,
+        "running_sessions": running_count,
+        "cycling_sessions": cycling_count,
+    }
+
+
 @router.get("/auth/start")
 async def start_oauth(
     user_id: Optional[int] = Query(None, description="Internal user ID"),
@@ -353,6 +380,67 @@ async def list_activities(
         }
     except Exception as e:
         logger.error(f"List activities failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/analysis/weekly")
+async def weekly_analysis(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    db: Session = Depends(get_db)
+):
+    """Return weekly training summary and baseline comparison."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        now = datetime.utcnow()
+        current_start = now - timedelta(days=7)
+        baseline_start = current_start - timedelta(days=28)
+
+        activities = db.query(GarminActivityData).filter(
+            GarminActivityData.user_id == resolved_user_id,
+            GarminActivityData.start_time >= baseline_start
+        ).order_by(GarminActivityData.start_time.desc()).all()
+
+        current_week = [activity for activity in activities if activity.start_time >= current_start]
+        baseline_window = [activity for activity in activities if baseline_start <= activity.start_time < current_start]
+
+        current_metrics = summarize_activities(current_week)
+        baseline_totals = summarize_activities(baseline_window)
+        baseline_weekly = {
+            "sessions": round(baseline_totals["sessions"] / 4, 2),
+            "distance_km": round(baseline_totals["distance_km"] / 4, 2),
+            "duration_hours": round(baseline_totals["duration_hours"] / 4, 2),
+            "average_heart_rate": baseline_totals["average_heart_rate"],
+        }
+
+        baseline_duration = baseline_weekly["duration_hours"]
+        load_ratio = round(
+            (current_metrics["duration_hours"] / baseline_duration), 2
+        ) if baseline_duration and baseline_duration > 0 else None
+
+        if load_ratio is None:
+            recommendation = "Not enough historical data yet. Keep building consistent easy sessions."
+        elif load_ratio > 1.25:
+            recommendation = "High load increase this week. Keep next sessions easy and prioritize recovery."
+        elif load_ratio < 0.75:
+            recommendation = "Training load is below baseline. Add one extra easy session if recovery is good."
+        else:
+            recommendation = "Load looks balanced versus your baseline. Keep the current structure."
+
+        return {
+            "window": {
+                "current_start": current_start.isoformat(),
+                "current_end": now.isoformat(),
+                "baseline_start": baseline_start.isoformat(),
+                "baseline_end": current_start.isoformat(),
+            },
+            "current_week": current_metrics,
+            "baseline_weekly": baseline_weekly,
+            "load_ratio": load_ratio,
+            "insight": recommendation,
+        }
+    except Exception as e:
+        logger.error(f"Weekly analysis failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchGarminActivities, fetchGarminAuthStatus, type GarminActivity } from "@/lib/api";
+import {
+  fetchGarminActivities,
+  fetchGarminAuthStatus,
+  fetchWeeklyAnalysis,
+  type GarminActivity,
+  type WeeklyAnalysis,
+} from "@/lib/api";
 
 export default function DashboardPage() {
   const [userId] = useState<number | null>(() => {
@@ -19,7 +25,7 @@ export default function DashboardPage() {
   );
   const [authenticated, setAuthenticated] = useState(false);
   const [activities, setActivities] = useState<GarminActivity[]>([]);
-  const [now] = useState(() => Date.now());
+  const [weeklyAnalysis, setWeeklyAnalysis] = useState<WeeklyAnalysis | null>(null);
 
   useEffect(() => {
     if (!userId) {
@@ -35,7 +41,9 @@ export default function DashboardPage() {
 
         if (status.authenticated) {
           const data = await fetchGarminActivities(userId, 10);
+          const analysis = await fetchWeeklyAnalysis(userId);
           setActivities(data.activities);
+          setWeeklyAnalysis(analysis);
         }
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "Onbekende fout");
@@ -48,25 +56,16 @@ export default function DashboardPage() {
   }, [userId]);
 
   const weeklySummary = useMemo(() => {
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-    const recentActivities = activities.filter(
-      (activity) => new Date(activity.start_time).getTime() >= sevenDaysAgo,
-    );
-    const totalDistanceMeters = recentActivities.reduce(
-      (sum, activity) => sum + (activity.distance_meters ?? 0),
-      0,
-    );
-    const totalDurationSeconds = recentActivities.reduce(
-      (sum, activity) => sum + (activity.duration_seconds ?? 0),
-      0,
-    );
+    if (!weeklyAnalysis) {
+      return null;
+    }
 
     return {
-      sessions: recentActivities.length,
-      distanceKm: (totalDistanceMeters / 1000).toFixed(1),
-      durationHours: (totalDurationSeconds / 3600).toFixed(1),
+      sessions: weeklyAnalysis.current_week.sessions,
+      distanceKm: weeklyAnalysis.current_week.distance_km.toFixed(1),
+      durationHours: weeklyAnalysis.current_week.duration_hours.toFixed(1),
     };
-  }, [activities, now]);
+  }, [weeklyAnalysis]);
 
   if (loading) {
     return <p>Laden...</p>;
@@ -93,11 +92,25 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard label="Sessies (7d)" value={String(weeklySummary.sessions)} />
-        <MetricCard label="Afstand (7d)" value={`${weeklySummary.distanceKm} km`} />
-        <MetricCard label="Duur (7d)" value={`${weeklySummary.durationHours} h`} />
-      </div>
+      {weeklySummary ? (
+        <>
+          <div className="grid gap-4 md:grid-cols-3">
+            <MetricCard label="Sessies (7d)" value={String(weeklySummary.sessions)} />
+            <MetricCard label="Afstand (7d)" value={`${weeklySummary.distanceKm} km`} />
+            <MetricCard label="Duur (7d)" value={`${weeklySummary.durationHours} h`} />
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-6">
+            <h2 className="text-lg font-semibold">Weekly insight</h2>
+            <p className="mt-2 text-sm text-slate-700">{weeklyAnalysis?.insight}</p>
+            <p className="mt-2 text-sm text-slate-600">
+              Baseline/week: {weeklyAnalysis?.baseline_weekly.sessions} sessies,{" "}
+              {weeklyAnalysis?.baseline_weekly.distance_km} km,{" "}
+              {weeklyAnalysis?.baseline_weekly.duration_hours} h
+              {weeklyAnalysis?.load_ratio !== null ? ` · Load ratio ${weeklyAnalysis?.load_ratio}` : ""}
+            </p>
+          </div>
+        </>
+      ) : null}
 
       <div className="rounded-xl border border-slate-200 bg-white p-6">
         <h2 className="text-lg font-semibold">Recente activiteiten</h2>

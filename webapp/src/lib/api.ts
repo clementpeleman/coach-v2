@@ -23,6 +23,33 @@ export type GarminActivity = {
   manual: boolean;
 };
 
+export type WeeklyAnalysis = {
+  window: {
+    current_start: string;
+    current_end: string;
+    baseline_start: string;
+    baseline_end: string;
+  };
+  current_week: {
+    sessions: number;
+    distance_meters: number;
+    distance_km: number;
+    duration_seconds: number;
+    duration_hours: number;
+    average_heart_rate: number | null;
+    running_sessions: number;
+    cycling_sessions: number;
+  };
+  baseline_weekly: {
+    sessions: number;
+    distance_km: number;
+    duration_hours: number;
+    average_heart_rate: number | null;
+  };
+  load_ratio: number | null;
+  insight: string;
+};
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
   if (!response.ok) {
@@ -46,4 +73,8 @@ export async function fetchGarminActivities(
   return getJson<{ activities: GarminActivity[]; count: number }>(
     `/garmin/activities?user_id=${userId}&limit=${limit}`,
   );
+}
+
+export async function fetchWeeklyAnalysis(userId: number): Promise<WeeklyAnalysis> {
+  return getJson<WeeklyAnalysis>(`/garmin/analysis/weekly?user_id=${userId}`);
 }
