@@ -8,7 +8,7 @@ sqlalchemy==2.0.43
 sqlalchemy-timescaledb==0.4.1
 psycopg2-binary==2.9.10
 garminconnect==0.2.30
-fit-tool==0.9.13
+fit-tool==0.9.14
 celery==5.5.3
 python-telegram-bot==22.5
 python-dotenv==1.1.0
