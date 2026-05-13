@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import garmin
+from app.api import web
 
 app = FastAPI(
     title="Coach Bot API",
@@ -18,6 +19,7 @@ app.add_middleware(
 
 # Include Garmin OAuth and webhook routes
 app.include_router(garmin.router)
+app.include_router(web.router)
 
 @app.get("/")
 def read_root():
@@ -30,6 +32,9 @@ def read_root():
             "garmin_disconnect": "/garmin/auth/disconnect",
             "garmin_activities": "/garmin/activities",
             "garmin_weekly_analysis": "/garmin/analysis/weekly",
+            "web_login": "/web/auth/login",
+            "web_me": "/web/auth/me",
+            "web_chat": "/web/chat",
             "health_webhook": "/garmin/webhook/health",
             "activity_webhook": "/garmin/webhook/activity"
         }
