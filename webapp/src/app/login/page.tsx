@@ -15,7 +15,10 @@ export default function LoginPage() {
     try {
       setLoading(true);
       setSavedMessage("");
+      const rawUserId = window.localStorage.getItem("sportsHubUserId");
+      const parsedUserId = rawUserId ? Number(rawUserId) : NaN;
       const response = await startDirectGarminOAuth({
+        userId: Number.isInteger(parsedUserId) && parsedUserId > 0 ? parsedUserId : undefined,
         email: hasValidEmail ? email : undefined,
         displayName: displayName || undefined,
       });
@@ -34,6 +37,9 @@ export default function LoginPage() {
       <p className="mt-2 text-sm text-slate-600">
         Koppel direct met Garmin OAuth. De app maakt automatisch een interne user en slaat je
         user ID lokaal op.
+      </p>
+      <p className="mt-1 text-sm text-slate-600">
+        Als je al eerder bent ingelogd op dit toestel, hoef je email/naam niet opnieuw in te vullen.
       </p>
 
       <div className="mt-6 max-w-sm">

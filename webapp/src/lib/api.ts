@@ -111,6 +111,7 @@ export async function fetchWebUser(userId: number): Promise<WebUser> {
 }
 
 export async function startDirectGarminOAuth(payload: {
+  userId?: number;
   email?: string;
   displayName?: string;
 }): Promise<{ user_id: number; authorization_url: string; state: string }> {
@@ -118,6 +119,7 @@ export async function startDirectGarminOAuth(payload: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      user_id: payload.userId ?? null,
       email: payload.email || null,
       display_name: payload.displayName || null,
     }),

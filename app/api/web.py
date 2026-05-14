@@ -50,6 +50,7 @@ class ChatResponse(BaseModel):
 
 
 class GarminDirectStartRequest(BaseModel):
+    user_id: Optional[int] = None
     email: Optional[str] = None
     display_name: Optional[str] = Field(default=None, max_length=120)
 
@@ -119,7 +120,13 @@ async def start_direct_garmin_oauth(
     if not settings.garmin_redirect_uri:
         raise HTTPException(status_code=500, detail="GARMIN_REDIRECT_URI not configured")
 
-    user = _create_or_reuse_user(db, email=payload.email, display_name=payload.display_name)
+    user = None
+    if payload.user_id is not None:
+        user = db.query(UserProfile).filter(UserProfile.user_id == payload.user_id).first()
+
+    if not user:
+        user = _create_or_reuse_user(db, email=payload.email, display_name=payload.display_name)
+
     oauth_service = GarminOAuthService()
 
     ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
