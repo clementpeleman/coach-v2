@@ -392,7 +392,15 @@ async def check_auth_status(
     try:
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         oauth_service = GarminOAuthService()
-        access_token = oauth_service.get_valid_access_token(db, resolved_user_id)
+
+        try:
+            access_token = oauth_service.get_valid_access_token(db, resolved_user_id)
+        except Exception as decrypt_err:
+            logger.warning(f"Token decryption failed for user {resolved_user_id}, tokens may need re-auth: {decrypt_err}")
+            return {
+                "authenticated": False,
+                "message": "Token expired or corrupted. Please reconnect Garmin."
+            }
 
         if not access_token:
             return {
