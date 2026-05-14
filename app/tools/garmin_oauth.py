@@ -282,6 +282,14 @@ class GarminOAuthService:
         access_token = token_data['access_token']
         garmin_user_id = self.get_user_id(access_token)
 
+        # If this Garmin user ID was already linked to another profile, release it first.
+        existing_profile_for_garmin = db.query(UserProfile).filter(
+            UserProfile.garmin_user_id == garmin_user_id,
+            UserProfile.user_id != user_id
+        ).first()
+        if existing_profile_for_garmin:
+            existing_profile_for_garmin.garmin_user_id = None
+
         # Update user profile with Garmin User ID
         user_profile.garmin_user_id = garmin_user_id
 
@@ -296,23 +304,23 @@ class GarminOAuthService:
         encrypted_access = self.encrypt_token(token_data['access_token'])
         encrypted_refresh = self.encrypt_token(token_data['refresh_token'])
 
-        # Check if token already exists
-        garmin_token = db.query(GarminToken).filter(
+        # Resolve existing token records by user and Garmin account.
+        token_for_user = db.query(GarminToken).filter(
             GarminToken.user_id == user_id
         ).first()
+        token_for_garmin = db.query(GarminToken).filter(
+            GarminToken.garmin_user_id == garmin_user_id
+        ).first()
 
-        if garmin_token:
-            # Update existing token
-            garmin_token.garmin_user_id = garmin_user_id
-            garmin_token.access_token = encrypted_access
-            garmin_token.refresh_token = encrypted_refresh
-            garmin_token.token_type = token_data.get('token_type', 'bearer')
-            garmin_token.expires_at = expires_at
-            garmin_token.refresh_expires_at = refresh_expires_at
-            garmin_token.scope = token_data.get('scope', '')
-            garmin_token.updated_at = datetime.utcnow()
+        # If both exist but are different rows, keep the Garmin-linked row and remove the duplicate.
+        if token_for_user and token_for_garmin and token_for_user.id != token_for_garmin.id:
+            db.delete(token_for_user)
+            db.flush()
+            garmin_token = token_for_garmin
         else:
-            # Create new token
+            garmin_token = token_for_garmin or token_for_user
+
+        if not garmin_token:
             garmin_token = GarminToken(
                 user_id=user_id,
                 garmin_user_id=garmin_user_id,
@@ -324,6 +332,16 @@ class GarminOAuthService:
                 scope=token_data.get('scope', '')
             )
             db.add(garmin_token)
+        else:
+            garmin_token.user_id = user_id
+            garmin_token.garmin_user_id = garmin_user_id
+            garmin_token.access_token = encrypted_access
+            garmin_token.refresh_token = encrypted_refresh
+            garmin_token.token_type = token_data.get('token_type', 'bearer')
+            garmin_token.expires_at = expires_at
+            garmin_token.refresh_expires_at = refresh_expires_at
+            garmin_token.scope = token_data.get('scope', '')
+            garmin_token.updated_at = datetime.utcnow()
 
         db.commit()
         db.refresh(garmin_token)
