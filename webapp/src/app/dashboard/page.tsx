@@ -107,13 +107,25 @@ export default function DashboardPage() {
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-6">
             <h2 className="text-lg font-semibold">Weekly insight</h2>
-            <p className="mt-2 text-sm text-slate-700">{weeklyAnalysis?.insight}</p>
+            <p className="mt-2 text-sm text-slate-700">{weeklyAnalysis?.summary}</p>
             <p className="mt-2 text-sm text-slate-600">
               Baseline/week: {weeklyAnalysis?.baseline_weekly.sessions} sessies,{" "}
               {weeklyAnalysis?.baseline_weekly.distance_km} km,{" "}
               {weeklyAnalysis?.baseline_weekly.duration_hours} h
               {weeklyAnalysis?.load_ratio !== null ? ` · Load ratio ${weeklyAnalysis?.load_ratio}` : ""}
             </p>
+            <ul className="mt-3 list-disc pl-5 text-sm text-slate-600">
+              <li>Advies: {weeklyAnalysis?.insight}</li>
+              <li>
+                Delta duur: {weeklyAnalysis?.deltas.duration_percent !== null ? `${weeklyAnalysis?.deltas.duration_percent}%` : "n.v.t."}
+              </li>
+              <li>
+                Delta afstand: {weeklyAnalysis?.deltas.distance_percent !== null ? `${weeklyAnalysis?.deltas.distance_percent}%` : "n.v.t."}
+              </li>
+              <li>
+                Gem. HR trend: {weeklyAnalysis?.deltas.avg_heart_rate_delta !== null ? `${weeklyAnalysis?.deltas.avg_heart_rate_delta} bpm` : "n.v.t."}
+              </li>
+            </ul>
           </div>
         </>
       ) : null}

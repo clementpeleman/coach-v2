@@ -43,18 +43,31 @@ export type WeeklyAnalysis = {
     distance_km: number;
     duration_seconds: number;
     duration_hours: number;
+    longest_session_minutes: number;
     average_heart_rate: number | null;
+    max_heart_rate: number | null;
     running_sessions: number;
     cycling_sessions: number;
+    running_average_heart_rate: number | null;
+    cycling_average_heart_rate: number | null;
   };
   baseline_weekly: {
     sessions: number;
     distance_km: number;
     duration_hours: number;
     average_heart_rate: number | null;
+    running_sessions: number;
+    cycling_sessions: number;
+  };
+  deltas: {
+    sessions_percent: number | null;
+    distance_percent: number | null;
+    duration_percent: number | null;
+    avg_heart_rate_delta: number | null;
   };
   load_ratio: number | null;
   insight: string;
+  summary: string;
 };
 
 async function getJson<T>(path: string): Promise<T> {

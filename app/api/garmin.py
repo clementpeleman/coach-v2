@@ -32,15 +32,23 @@ def summarize_activities(activities: list[GarminActivityData]) -> Dict:
     total_distance_m = sum((activity.distance or 0.0) for activity in activities)
     total_duration_s = sum((activity.duration or 0) for activity in activities)
     hr_values = [activity.average_heart_rate for activity in activities if activity.average_heart_rate]
+    max_hr_values = [activity.max_heart_rate for activity in activities if activity.max_heart_rate]
+    longest_session_seconds = max((activity.duration or 0) for activity in activities) if activities else 0
 
     running_count = 0
     cycling_count = 0
+    running_hr_values = []
+    cycling_hr_values = []
     for activity in activities:
         activity_type = (activity.activity_type or "").upper()
         if "RUN" in activity_type:
             running_count += 1
+            if activity.average_heart_rate:
+                running_hr_values.append(activity.average_heart_rate)
         if "CYCLE" in activity_type or "BIKE" in activity_type:
             cycling_count += 1
+            if activity.average_heart_rate:
+                cycling_hr_values.append(activity.average_heart_rate)
 
     return {
         "sessions": len(activities),
@@ -48,10 +56,59 @@ def summarize_activities(activities: list[GarminActivityData]) -> Dict:
         "distance_km": round(total_distance_m / 1000, 2),
         "duration_seconds": int(total_duration_s),
         "duration_hours": round(total_duration_s / 3600, 2),
+        "longest_session_minutes": round(longest_session_seconds / 60, 1) if longest_session_seconds else 0.0,
         "average_heart_rate": round(sum(hr_values) / len(hr_values), 1) if hr_values else None,
+        "max_heart_rate": max(max_hr_values) if max_hr_values else None,
         "running_sessions": running_count,
         "cycling_sessions": cycling_count,
+        "running_average_heart_rate": round(sum(running_hr_values) / len(running_hr_values), 1) if running_hr_values else None,
+        "cycling_average_heart_rate": round(sum(cycling_hr_values) / len(cycling_hr_values), 1) if cycling_hr_values else None,
     }
+
+
+def compute_percent_change(current: float, baseline: float) -> Optional[float]:
+    """Compute percentage change between current and baseline values."""
+    if baseline == 0:
+        return None
+    return round(((current - baseline) / baseline) * 100, 1)
+
+
+def build_weekly_summary(
+    current_week: Dict,
+    baseline_weekly: Dict,
+    load_ratio: Optional[float],
+    hr_delta: Optional[float],
+) -> str:
+    """Generate a concise Dutch weekly coaching summary."""
+    volume_delta = compute_percent_change(current_week["duration_hours"], baseline_weekly["duration_hours"])
+    distance_delta = compute_percent_change(current_week["distance_km"], baseline_weekly["distance_km"])
+
+    summary_parts = [
+        (
+            f"Deze week: {current_week['sessions']} sessies "
+            f"({current_week['running_sessions']} run, {current_week['cycling_sessions']} fiets), "
+            f"{current_week['duration_hours']}u en {current_week['distance_km']} km."
+        )
+    ]
+
+    if volume_delta is not None:
+        summary_parts.append(f"Volume vs 4-weeks gemiddeld: {volume_delta:+.1f}%.")
+    if distance_delta is not None:
+        summary_parts.append(f"Afstand vs 4-weeks gemiddeld: {distance_delta:+.1f}%.")
+    if hr_delta is not None:
+        summary_parts.append(f"Gemiddelde hartslag trend: {hr_delta:+.1f} bpm.")
+
+    if load_ratio is None:
+        advice = "Nog beperkte historiek: focus op consistente rustige sessies."
+    elif load_ratio > 1.25:
+        advice = "Belasting stijgt sterk; plan extra herstel en beperk intensiteit."
+    elif load_ratio < 0.75:
+        advice = "Belasting ligt laag; voeg eventueel 1 rustige sessie toe."
+    else:
+        advice = "Belasting is goed in balans; huidige structuur aanhouden."
+    summary_parts.append(f"Advies: {advice}")
+
+    return " ".join(summary_parts)
 
 
 @router.get("/auth/start")
@@ -373,12 +430,25 @@ async def weekly_analysis(
             "distance_km": round(baseline_totals["distance_km"] / 4, 2),
             "duration_hours": round(baseline_totals["duration_hours"] / 4, 2),
             "average_heart_rate": baseline_totals["average_heart_rate"],
+            "running_sessions": round(baseline_totals["running_sessions"] / 4, 2),
+            "cycling_sessions": round(baseline_totals["cycling_sessions"] / 4, 2),
         }
 
         baseline_duration = baseline_weekly["duration_hours"]
         load_ratio = round(
             (current_metrics["duration_hours"] / baseline_duration), 2
         ) if baseline_duration and baseline_duration > 0 else None
+
+        hr_delta = None
+        if current_metrics["average_heart_rate"] is not None and baseline_weekly["average_heart_rate"] is not None:
+            hr_delta = round(current_metrics["average_heart_rate"] - baseline_weekly["average_heart_rate"], 1)
+
+        metrics_delta = {
+            "sessions_percent": compute_percent_change(current_metrics["sessions"], baseline_weekly["sessions"]),
+            "distance_percent": compute_percent_change(current_metrics["distance_km"], baseline_weekly["distance_km"]),
+            "duration_percent": compute_percent_change(current_metrics["duration_hours"], baseline_weekly["duration_hours"]),
+            "avg_heart_rate_delta": hr_delta,
+        }
 
         if load_ratio is None:
             recommendation = "Not enough historical data yet. Keep building consistent easy sessions."
@@ -389,6 +459,13 @@ async def weekly_analysis(
         else:
             recommendation = "Load looks balanced versus your baseline. Keep the current structure."
 
+        weekly_summary = build_weekly_summary(
+            current_week=current_metrics,
+            baseline_weekly=baseline_weekly,
+            load_ratio=load_ratio,
+            hr_delta=hr_delta,
+        )
+
         return {
             "window": {
                 "current_start": current_start.isoformat(),
@@ -398,8 +475,10 @@ async def weekly_analysis(
             },
             "current_week": current_metrics,
             "baseline_weekly": baseline_weekly,
+            "deltas": metrics_delta,
             "load_ratio": load_ratio,
             "insight": recommendation,
+            "summary": weekly_summary,
         }
     except Exception as e:
         logger.error(f"Weekly analysis failed: {e}")
