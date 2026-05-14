@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { sendChatMessage } from "@/lib/api";
+import { useSessionUserId } from "@/lib/session";
 
 type UIMessage = {
   role: "user" | "assistant";
@@ -9,20 +10,12 @@ type UIMessage = {
 };
 
 export default function ChatPage() {
-  const [userId] = useState<number | null>(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    const rawUserId = window.localStorage.getItem("sportsHubUserId");
-    const parsed = rawUserId ? Number(rawUserId) : NaN;
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-  });
+  const session = useSessionUserId();
+  const userId = session.userId;
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(
-    userId ? null : "Geen user ID gevonden. Log eerst in op de login pagina.",
-  );
+  const [error, setError] = useState<string | null>(null);
 
   const handleSend = async () => {
     if (!userId || !input.trim() || loading) {
@@ -50,6 +43,10 @@ export default function ChatPage() {
       setLoading(false);
     }
   };
+
+  if (!session.resolved) {
+    return <p>Laden...</p>;
+  }
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-6">
@@ -97,6 +94,11 @@ export default function ChatPage() {
         </button>
       </div>
 
+      {!userId ? (
+        <p className="mt-3 text-sm text-rose-700">
+          Geen user ID gevonden. Log eerst in op de login pagina.
+        </p>
+      ) : null}
       {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
     </section>
   );

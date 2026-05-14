@@ -8,34 +8,25 @@ import {
   type GarminActivity,
   type WeeklyAnalysis,
 } from "@/lib/api";
+import { useSessionUserId } from "@/lib/session";
 
 export default function DashboardPage() {
-  const [userId] = useState<number | null>(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
-
-    const queryUserId = new URLSearchParams(window.location.search).get("user_id");
-    const parsedQueryUserId = queryUserId ? Number(queryUserId) : NaN;
-    if (Number.isInteger(parsedQueryUserId) && parsedQueryUserId > 0) {
-      window.localStorage.setItem("sportsHubUserId", String(parsedQueryUserId));
-      return parsedQueryUserId;
-    }
-
-    const rawUserId = window.localStorage.getItem("sportsHubUserId");
-    const parsed = rawUserId ? Number(rawUserId) : NaN;
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-  });
-  const [loading, setLoading] = useState(userId !== null);
-  const [error, setError] = useState<string | null>(
-    userId ? null : "Geen user ID gevonden. Ga eerst naar Login.",
-  );
+  const session = useSessionUserId();
+  const userId = session.userId;
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [activities, setActivities] = useState<GarminActivity[]>([]);
   const [weeklyAnalysis, setWeeklyAnalysis] = useState<WeeklyAnalysis | null>(null);
 
   useEffect(() => {
-    if (!userId) {
+    if (session.resolved && userId) {
+      window.localStorage.setItem("sportsHubUserId", String(userId));
+    }
+  }, [session.resolved, userId]);
+
+  useEffect(() => {
+    if (!session.resolved || !userId) {
       return;
     }
 
@@ -60,7 +51,7 @@ export default function DashboardPage() {
     };
 
     void load();
-  }, [userId]);
+  }, [session.resolved, userId]);
 
   const weeklySummary = useMemo(() => {
     if (!weeklyAnalysis) {
@@ -74,8 +65,16 @@ export default function DashboardPage() {
     };
   }, [weeklyAnalysis]);
 
-  if (loading) {
+  if (!session.resolved || loading) {
     return <p>Laden...</p>;
+  }
+
+  if (!userId) {
+    return (
+      <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-rose-800">
+        Geen user ID gevonden. Ga eerst naar Login.
+      </div>
+    );
   }
 
   if (error) {
