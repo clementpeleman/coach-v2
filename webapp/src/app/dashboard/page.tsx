@@ -15,6 +15,13 @@ export default function DashboardPage() {
       return null;
     }
 
+    const queryUserId = new URLSearchParams(window.location.search).get("user_id");
+    const parsedQueryUserId = queryUserId ? Number(queryUserId) : NaN;
+    if (Number.isInteger(parsedQueryUserId) && parsedQueryUserId > 0) {
+      window.localStorage.setItem("sportsHubUserId", String(parsedQueryUserId));
+      return parsedQueryUserId;
+    }
+
     const rawUserId = window.localStorage.getItem("sportsHubUserId");
     const parsed = rawUserId ? Number(rawUserId) : NaN;
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
