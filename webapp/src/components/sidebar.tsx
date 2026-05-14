@@ -9,6 +9,7 @@ import {
   Settings,
   LogIn,
   TrendingUp,
+  UserCircle,
   Zap,
 } from "lucide-react";
 
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/activities", label: "Activiteiten", icon: Activity },
   { href: "/trends", label: "Trends", icon: TrendingUp },
+  { href: "/profile", label: "Profiel", icon: UserCircle },
   { href: "/chat", label: "Coach", icon: MessageCircle },
   { href: "/settings", label: "Instellingen", icon: Settings },
 ];

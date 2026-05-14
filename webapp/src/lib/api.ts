@@ -200,6 +200,82 @@ export async function startDirectGarminOAuth(payload: {
   return response.json();
 }
 
+export type AthleteProfile = {
+  overview: {
+    total_activities: number;
+    total_distance_km: number;
+    total_duration_hours: number;
+    total_calories: number;
+    total_elevation_m: number;
+  };
+  heart_rate_zones: {
+    max_hr_observed: number;
+    zone1: { name: string; range: string; min: number; max: number };
+    zone2: { name: string; range: string; min: number; max: number };
+    zone3: { name: string; range: string; min: number; max: number };
+    zone4: { name: string; range: string; min: number; max: number };
+    zone5: { name: string; range: string; min: number; max: number };
+  } | null;
+  running: {
+    total_sessions: number;
+    total_distance_km: number;
+    total_duration_hours: number;
+    total_calories: number;
+    total_elevation_m: number;
+    avg_distance_km: number | null;
+    avg_duration_min: number | null;
+    avg_heart_rate: number | null;
+    max_heart_rate_observed: number | null;
+    avg_calories_per_session: number | null;
+    avg_pace_min_km: number | null;
+    best_pace_min_km: number | null;
+    avg_cadence_spm: number | null;
+    longest_run_km: number | null;
+    longest_run_min: number | null;
+  } | null;
+  cycling: {
+    total_sessions: number;
+    total_distance_km: number;
+    total_duration_hours: number;
+    total_calories: number;
+    total_elevation_m: number;
+    avg_distance_km: number | null;
+    avg_duration_min: number | null;
+    avg_heart_rate: number | null;
+    max_heart_rate_observed: number | null;
+    avg_calories_per_session: number | null;
+    avg_speed_kmh: number | null;
+    max_speed_kmh: number | null;
+    avg_elevation_m: number | null;
+    longest_ride_km: number | null;
+    longest_ride_min: number | null;
+  } | null;
+  personal_records: {
+    running?: Record<string, { value: number; unit: string; date: string | null; activity: string | null }>;
+    cycling?: Record<string, { value: number; unit: string; date: string | null; activity: string | null }>;
+  };
+  training_patterns: {
+    favorite_days: Array<{ day: string; count: number }>;
+    favorite_hours: Array<{ hour: number; count: number }>;
+    avg_days_between_sessions: number | null;
+    max_days_between_sessions: number | null;
+    sessions_per_week: number;
+    first_activity: string | null;
+    last_activity: string | null;
+    total_active_weeks: number;
+  };
+  health: {
+    days_with_data: number;
+    avg_resting_hr: number | null;
+    min_resting_hr: number | null;
+    max_resting_hr: number | null;
+  } | null;
+};
+
+export async function fetchAthleteProfile(userId: number): Promise<AthleteProfile> {
+  return getJson<AthleteProfile>(`/analysis/profile?user_id=${userId}`);
+}
+
 export async function sendChatMessage(payload: {
   userId: number;
   message: string;
