@@ -22,8 +22,8 @@ export default function MetricCard({ label, value, sub, icon, trend, trendLabel 
       <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
       {(sub || trendLabel) && (
         <p className="mt-1 text-xs text-slate-500">
-          {trendLabel && <span className={`font-medium ${trendColor}`}>{trendLabel} </span>}
-          {sub}
+          {trendLabel && <span className={`font-medium ${trendColor}`}>{trendLabel}</span>}
+          {trendLabel && sub ? <span className="text-slate-400"> {sub}</span> : sub}
         </p>
       )}
     </div>

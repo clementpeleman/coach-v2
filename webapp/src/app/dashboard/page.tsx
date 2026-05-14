@@ -137,6 +137,7 @@ export default function DashboardPage() {
             icon={<Flame className="h-4 w-4" />}
             trend={deltas?.sessions_percent != null ? (deltas.sessions_percent > 0 ? "up" : deltas.sessions_percent < 0 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.sessions_percent != null ? `${deltas.sessions_percent > 0 ? "+" : ""}${deltas.sessions_percent}%` : undefined}
+            sub="vs 4w gem."
           />
           <MetricCard
             label="Afstand"
@@ -144,6 +145,7 @@ export default function DashboardPage() {
             icon={<Route className="h-4 w-4" />}
             trend={deltas?.distance_percent != null ? (deltas.distance_percent > 0 ? "up" : deltas.distance_percent < 0 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.distance_percent != null ? `${deltas.distance_percent > 0 ? "+" : ""}${deltas.distance_percent}%` : undefined}
+            sub="vs 4w gem."
           />
           <MetricCard
             label="Duur"
@@ -151,6 +153,7 @@ export default function DashboardPage() {
             icon={<Clock className="h-4 w-4" />}
             trend={deltas?.duration_percent != null ? (deltas.duration_percent > 0 ? "up" : deltas.duration_percent < 0 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.duration_percent != null ? `${deltas.duration_percent > 0 ? "+" : ""}${deltas.duration_percent}%` : undefined}
+            sub="vs 4w gem."
           />
           <MetricCard
             label="Gem. hartslag"
@@ -158,6 +161,7 @@ export default function DashboardPage() {
             icon={<Heart className="h-4 w-4" />}
             trend={deltas?.avg_heart_rate_delta != null ? (deltas.avg_heart_rate_delta > 2 ? "up" : deltas.avg_heart_rate_delta < -2 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.avg_heart_rate_delta != null ? `${deltas.avg_heart_rate_delta > 0 ? "+" : ""}${deltas.avg_heart_rate_delta} bpm` : undefined}
+            sub="vs 4w gem."
           />
         </div>
       )}
