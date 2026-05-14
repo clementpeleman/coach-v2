@@ -12,16 +12,12 @@ import {
 import { useSessionUserId } from "@/lib/session";
 import MetricCard from "@/components/metric-card";
 import SportBadge from "@/components/sport-badge";
+import PeriodPicker from "@/components/period-picker";
+import { usePeriodDays } from "@/lib/period";
 import {
   Heart, Clock, Route, Flame, ArrowRight, Zap,
   AlertTriangle, CheckCircle2, Info,
 } from "lucide-react";
-
-const PERIODS = [
-  { label: "7d", days: 7 },
-  { label: "14d", days: 14 },
-  { label: "30d", days: 30 },
-] as const;
 
 export default function DashboardPage() {
   const session = useSessionUserId();
@@ -30,7 +26,7 @@ export default function DashboardPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [activities, setActivities] = useState<GarminActivity[]>([]);
   const [weeklyAnalysis, setWeeklyAnalysis] = useState<WeeklyAnalysis | null>(null);
-  const [periodDays, setPeriodDays] = useState(7);
+  const periodDays = usePeriodDays();
 
   useEffect(() => {
     if (session.resolved && userId) {
@@ -102,21 +98,7 @@ export default function DashboardPage() {
       {/* Header met periode selector */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Dashboard</h1>
-        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
-          {PERIODS.map((p) => (
-            <button
-              key={p.days}
-              onClick={() => setPeriodDays(p.days)}
-              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                periodDays === p.days
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        <PeriodPicker />
       </div>
 
       {/* Visuele highlights */}

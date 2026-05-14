@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { fetchGarminActivities, fetchAthleteProfile, type AthleteProfile } from "@/lib/api";
 import { useSessionUserId } from "@/lib/session";
 import MetricCard from "@/components/metric-card";
+import PeriodPicker from "@/components/period-picker";
+import { usePeriodDays } from "@/lib/period";
 import {
   Heart, Route, Clock, Flame, Mountain, Footprints, Bike,
   Trophy, Calendar, Zap, TrendingUp, BarChart3,
@@ -19,6 +21,7 @@ export default function AnalysePage() {
   const [profile, setProfile] = useState<AthleteProfile | null>(null);
   const [weeklyTrend, setWeeklyTrend] = useState<TrendRow[]>([]);
   const [typeDist, setTypeDist] = useState<Record<string, number>>({});
+  const periodDays = usePeriodDays();
 
   useEffect(() => {
     if (!session.resolved || !userId) return;
@@ -27,7 +30,7 @@ export default function AnalysePage() {
       try {
         const [profileData, actData] = await Promise.all([
           fetchAthleteProfile(userId),
-          fetchGarminActivities(userId, 500, 90),
+          fetchGarminActivities(userId, 500, periodDays),
         ]);
         setProfile(profileData);
         setWeeklyTrend(actData.weekly_trend ?? []);
@@ -36,7 +39,7 @@ export default function AnalysePage() {
       setLoading(false);
     };
     void load();
-  }, [session.resolved, userId]);
+  }, [session.resolved, userId, periodDays]);
 
   if (!session.resolved || loading) {
     return (
@@ -74,10 +77,13 @@ export default function AnalysePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Analyse</h1>
-        <p className="text-xs text-slate-500">
-          {o.total_activities} activiteiten · {patterns.total_active_weeks} weken
-        </p>
+        <div>
+          <h1 className="text-2xl font-bold">Analyse</h1>
+          <p className="text-xs text-slate-500">
+            {o.total_activities} activiteiten · {patterns.total_active_weeks} weken
+          </p>
+        </div>
+        <PeriodPicker />
       </div>
 
       {/* Tabs */}

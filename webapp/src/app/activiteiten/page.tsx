@@ -5,15 +5,12 @@ import { fetchGarminActivities, requestSmartActivityBackfill, type GarminActivit
 import { useSessionUserId } from "@/lib/session";
 import MetricCard from "@/components/metric-card";
 import SportBadge from "@/components/sport-badge";
+import PeriodPicker from "@/components/period-picker";
+import { usePeriodDays } from "@/lib/period";
 import { Clock, Route, Heart, Flame, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 
 type TrendRow = { week_start: string; sessions: number; distance_km: number; duration_hours: number; average_heart_rate: number | null };
 type Summary = { sessions: number; distance_km: number; duration_hours: number; average_heart_rate: number | null; longest_session_minutes: number; max_heart_rate: number | null };
-
-const PERIODS = [
-  { label: "1 maand", days: 30 },
-  { label: "3 maanden", days: 90 },
-] as const;
 
 export default function ActivitiesPage() {
   const session = useSessionUserId();
@@ -25,7 +22,7 @@ export default function ActivitiesPage() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
-  const [periodDays, setPeriodDays] = useState(30);
+  const periodDays = usePeriodDays();
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -84,19 +81,7 @@ export default function ActivitiesPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Activiteiten</h1>
         <div className="flex items-center gap-2">
-          {PERIODS.map((p) => (
-            <button
-              key={p.days}
-              onClick={() => setPeriodDays(p.days)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                periodDays === p.days
-                  ? "bg-emerald-600 text-white"
-                  : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
+          <PeriodPicker />
           <button
             onClick={handleSync}
             disabled={syncing}
