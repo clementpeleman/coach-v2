@@ -66,6 +66,48 @@ def summarize_activities(activities: list[GarminActivityData]) -> Dict:
     }
 
 
+def build_weekly_activity_trend(activities: list[GarminActivityData]) -> list[Dict]:
+    """Build weekly aggregated trend data for a list of activities."""
+    weekly: Dict[str, Dict] = {}
+
+    for activity in activities:
+        if not activity.start_time:
+            continue
+
+        week_start_date = (activity.start_time - timedelta(days=activity.start_time.weekday())).date()
+        week_key = week_start_date.isoformat()
+        if week_key not in weekly:
+            weekly[week_key] = {
+                "week_start": week_key,
+                "sessions": 0,
+                "distance_meters": 0.0,
+                "duration_seconds": 0,
+                "heart_rates": [],
+            }
+
+        weekly[week_key]["sessions"] += 1
+        weekly[week_key]["distance_meters"] += activity.distance or 0.0
+        weekly[week_key]["duration_seconds"] += activity.duration or 0
+        if activity.average_heart_rate:
+            weekly[week_key]["heart_rates"].append(activity.average_heart_rate)
+
+    trend = []
+    for week_key in sorted(weekly.keys()):
+        item = weekly[week_key]
+        heart_rates = item["heart_rates"]
+        trend.append(
+            {
+                "week_start": week_key,
+                "sessions": item["sessions"],
+                "distance_km": round(item["distance_meters"] / 1000, 2),
+                "duration_hours": round(item["duration_seconds"] / 3600, 2),
+                "average_heart_rate": round(sum(heart_rates) / len(heart_rates), 1) if heart_rates else None,
+            }
+        )
+
+    return trend
+
+
 def compute_percent_change(current: float, baseline: float) -> Optional[float]:
     """Compute percentage change between current and baseline values."""
     if baseline == 0:
@@ -366,15 +408,26 @@ async def get_recent_data(
 async def list_activities(
     user_id: Optional[int] = Query(None, description="Internal user ID"),
     telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
-    limit: int = Query(20, ge=1, le=200, description="Maximum activities to return"),
+    limit: int = Query(200, ge=1, le=1000, description="Maximum activities to return"),
+    period_days: int = Query(30, ge=7, le=365, description="Number of days to look back"),
     db: Session = Depends(get_db)
 ):
     """List recent Garmin activities stored for a user."""
     try:
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        start_date = datetime.utcnow() - timedelta(days=period_days)
         activities = db.query(GarminActivityData).filter(
-            GarminActivityData.user_id == resolved_user_id
+            GarminActivityData.user_id == resolved_user_id,
+            GarminActivityData.start_time >= start_date
         ).order_by(GarminActivityData.start_time.desc()).limit(limit).all()
+
+        summary = summarize_activities(activities)
+        type_distribution: Dict[str, int] = {}
+        for activity in activities:
+            activity_type = (activity.activity_type or "UNKNOWN").upper()
+            type_distribution[activity_type] = type_distribution.get(activity_type, 0) + 1
+
+        weekly_trend = build_weekly_activity_trend(activities)
 
         return {
             "activities": [
@@ -395,7 +448,11 @@ async def list_activities(
                 }
                 for activity in activities
             ],
-            "count": len(activities)
+            "count": len(activities),
+            "period_days": period_days,
+            "summary": summary,
+            "type_distribution": type_distribution,
+            "weekly_trend": weekly_trend,
         }
     except Exception as e:
         logger.error(f"List activities failed: {e}")

@@ -23,6 +23,34 @@ export type GarminActivity = {
   manual: boolean;
 };
 
+export type ActivitiesResponse = {
+  activities: GarminActivity[];
+  count: number;
+  period_days: number;
+  summary: {
+    sessions: number;
+    distance_meters: number;
+    distance_km: number;
+    duration_seconds: number;
+    duration_hours: number;
+    longest_session_minutes: number;
+    average_heart_rate: number | null;
+    max_heart_rate: number | null;
+    running_sessions: number;
+    cycling_sessions: number;
+    running_average_heart_rate: number | null;
+    cycling_average_heart_rate: number | null;
+  };
+  type_distribution: Record<string, number>;
+  weekly_trend: Array<{
+    week_start: string;
+    sessions: number;
+    distance_km: number;
+    duration_hours: number;
+    average_heart_rate: number | null;
+  }>;
+};
+
 export type WebUser = {
   user_id: number;
   email?: string;
@@ -88,10 +116,11 @@ export async function fetchGarminAuthStatus(userId: number): Promise<GarminAuthS
 
 export async function fetchGarminActivities(
   userId: number,
-  limit = 20,
-): Promise<{ activities: GarminActivity[]; count: number }> {
-  return getJson<{ activities: GarminActivity[]; count: number }>(
-    `/garmin/activities?user_id=${userId}&limit=${limit}`,
+  limit = 200,
+  periodDays = 30,
+): Promise<ActivitiesResponse> {
+  return getJson<ActivitiesResponse>(
+    `/garmin/activities?user_id=${userId}&limit=${limit}&period_days=${periodDays}`,
   );
 }
 
