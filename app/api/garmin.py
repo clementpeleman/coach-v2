@@ -167,71 +167,33 @@ async def oauth_callback(
         access_token = token_data['access_token']
         permissions = oauth_service.get_user_permissions(access_token)
 
-        # Return a simple HTML page that can be closed
+        # Redirect the user back to the web app after successful OAuth.
         from fastapi.responses import HTMLResponse
-        html_content = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Garmin Verbonden</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    min-height: 100vh;
-                    margin: 0;
-                    background: #ffffff;
-                }
-                .container {
-                    background: white;
-                    padding: 40px;
-                    border-radius: 10px;
-                    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-                    text-align: center;
-                    max-width: 400px;
-                }
-                .success-icon {
-                    font-size: 60px;
-                    color: #28a745;
-                    margin-bottom: 20px;
-                }
-                h1 {
-                    color: #333;
-                    margin-bottom: 10px;
-                }
-                p {
-                    color: #666;
-                    line-height: 1.6;
-                }
-                .close-btn {
-                    margin-top: 20px;
-                    padding: 12px 30px;
-                    background: #667eea;
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    font-size: 16px;
-                    cursor: pointer;
-                }
-                .close-btn:hover {
-                    background: #5568d3;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="success-icon"></div>
-                <h1>Succesvol verbonden!</h1>
-                <p>Je Garmin account is succesvol gekoppeld.</p>
-                <p>Je kunt dit venster nu sluiten en teruggaan naar de webapp.</p>
-                <button class="close-btn" onclick="window.close()">Sluit venster</button>
-            </div>
-        </body>
-        </html>
-        """
+        base_webapp_url = settings.webapp_url.rstrip("/")
+        redirect_url = f"{base_webapp_url}/dashboard?garmin_connected=1&user_id={user_id}"
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Garmin verbonden</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="2;url={redirect_url}">
+</head>
+<body style="font-family: Arial, sans-serif; padding: 24px;">
+  <h1>Succesvol verbonden!</h1>
+  <p>Je Garmin account is gekoppeld. Je wordt automatisch teruggestuurd naar de app.</p>
+  <p><a href="{redirect_url}">Klik hier als je niet automatisch wordt doorgestuurd</a></p>
+  <script>
+    try {{
+      localStorage.setItem("sportsHubUserId", "{user_id}");
+    }} catch (err) {{}}
+    setTimeout(function () {{
+      window.location.href = "{redirect_url}";
+    }}, 1200);
+  </script>
+</body>
+</html>
+"""
         return HTMLResponse(content=html_content)
 
     except Exception as e:

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     garmin_consumer_key: Optional[str] = Field(default=None, env="GARMIN_CONSUMER_KEY")
     garmin_consumer_secret: Optional[str] = Field(default=None, env="GARMIN_CONSUMER_SECRET")
     garmin_redirect_uri: Optional[str] = Field(default=None, env="GARMIN_REDIRECT_URI")
+    webapp_url: str = Field(default="http://localhost:8000", env="WEBAPP_URL")
 
     @field_validator("encryption_key")
     @classmethod
@@ -58,6 +59,14 @@ class Settings(BaseSettings):
         """Validate Garmin redirect URI format."""
         if v and not v.startswith("https://"):
             raise ValueError("GARMIN_REDIRECT_URI must start with https://")
+        return v
+
+    @field_validator("webapp_url")
+    @classmethod
+    def validate_webapp_url(cls, v: str) -> str:
+        """Validate web app URL format."""
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("WEBAPP_URL must start with http:// or https://")
         return v
 
     class Config:
