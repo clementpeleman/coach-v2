@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 import "./globals.css";
+import Sidebar from "@/components/sidebar";
+import MobileNav from "@/components/mobile-nav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,22 +26,17 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="nl"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-slate-50 text-slate-900">
-        <header className="border-b border-slate-200 bg-white">
-          <nav className="mx-auto flex w-full max-w-5xl items-center gap-5 px-6 py-4 text-sm">
-            <Link href="/" className="font-semibold">
-              Sports Hub
-            </Link>
-            <Link href="/login">Login</Link>
-            <Link href="/dashboard">Dashboard</Link>
-            <Link href="/activities">Activities</Link>
-            <Link href="/chat">Chat</Link>
-          </nav>
-        </header>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">{children}</main>
+      <body className="flex min-h-full bg-slate-50 text-slate-900">
+        <Sidebar />
+        <div className="flex flex-1 flex-col lg:pl-56">
+          <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 pb-20 lg:pb-8">
+            {children}
+          </main>
+        </div>
+        <MobileNav />
       </body>
     </html>
   );
