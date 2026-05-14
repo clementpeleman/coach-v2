@@ -5,21 +5,20 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Activity,
-  MessageCircle,
+  BarChart3,
   Settings,
   LogIn,
-  TrendingUp,
-  UserCircle,
   Zap,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/activities", label: "Activiteiten", icon: Activity },
-  { href: "/trends", label: "Trends", icon: TrendingUp },
-  { href: "/profile", label: "Profiel", icon: UserCircle },
-  { href: "/chat", label: "Coach", icon: MessageCircle },
-  { href: "/settings", label: "Instellingen", icon: Settings },
+  { href: "/analyse", label: "Analyse", icon: BarChart3 },
+  { href: "/activiteiten", label: "Activiteiten", icon: Activity },
+];
+
+const BOTTOM_ITEMS = [
+  { href: "/instellingen", label: "Instellingen", icon: Settings },
 ];
 
 export default function Sidebar() {
@@ -53,10 +52,28 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-slate-200 px-3 py-3">
+      <div className="border-t border-slate-200 px-3 py-3 space-y-1">
+        {BOTTOM_ITEMS.map((item) => {
+          const active = pathname === item.href;
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                active
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {item.label}
+            </Link>
+          );
+        })}
         <Link
           href="/login"
-          className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+          className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-400 hover:bg-slate-50 hover:text-slate-900"
         >
           <LogIn className="h-4 w-4" />
           Garmin koppeling

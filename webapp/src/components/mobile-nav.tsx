@@ -2,14 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Activity, MessageCircle, TrendingUp, UserCircle } from "lucide-react";
+import { LayoutDashboard, Activity, BarChart3 } from "lucide-react";
 
 const TABS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/activities", label: "Activiteiten", icon: Activity },
-  { href: "/trends", label: "Trends", icon: TrendingUp },
-  { href: "/profile", label: "Profiel", icon: UserCircle },
-  { href: "/chat", label: "Coach", icon: MessageCircle },
+  { href: "/analyse", label: "Analyse", icon: BarChart3 },
+  { href: "/activiteiten", label: "Activiteiten", icon: Activity },
 ];
 
 export default function MobileNav() {

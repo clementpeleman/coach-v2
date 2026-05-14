@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/sidebar";
 import MobileNav from "@/components/mobile-nav";
+import CoachChat from "@/components/coach-chat";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Sports Hub",
-  description: "Web app for Garmin-based coaching and analysis",
+  description: "Jouw persoonlijke sport coach en analyse platform",
 };
 
 export default function RootLayout({
@@ -37,6 +38,7 @@ export default function RootLayout({
           </main>
         </div>
         <MobileNav />
+        <CoachChat />
       </body>
     </html>
   );
