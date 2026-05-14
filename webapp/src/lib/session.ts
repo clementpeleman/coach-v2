@@ -5,6 +5,16 @@ type SessionSnapshot = {
   userId: number | null;
 };
 
+const SERVER_SNAPSHOT: SessionSnapshot = {
+  resolved: false,
+  userId: null,
+};
+
+let clientSnapshotCache: SessionSnapshot = {
+  resolved: true,
+  userId: null,
+};
+
 function readUserIdFromClient(): number | null {
   if (typeof window === "undefined") {
     return null;
@@ -34,19 +44,23 @@ function subscribeToSessionChanges(onStoreChange: () => void): () => void {
   };
 }
 
-export function useSessionUserId(): SessionSnapshot {
-  const getSnapshot = (): SessionSnapshot => ({
-    resolved: true,
-    userId: readUserIdFromClient(),
-  });
-  const getServerSnapshot = (): SessionSnapshot => ({
-    resolved: false,
-    userId: null,
-  });
+function getClientSnapshot(): SessionSnapshot {
+  const userId = readUserIdFromClient();
+  if (clientSnapshotCache.userId === userId) {
+    return clientSnapshotCache;
+  }
 
+  clientSnapshotCache = {
+    resolved: true,
+    userId,
+  };
+  return clientSnapshotCache;
+}
+
+export function useSessionUserId(): SessionSnapshot {
   return useSyncExternalStore(
     subscribeToSessionChanges,
-    getSnapshot,
-    getServerSnapshot,
+    getClientSnapshot,
+    () => SERVER_SNAPSHOT,
   );
 }
