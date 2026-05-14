@@ -124,6 +124,31 @@ export async function fetchGarminActivities(
   );
 }
 
+export async function requestSmartActivityBackfill(
+  userId: number,
+  days = 120,
+): Promise<{
+  status: string;
+  message: string;
+  activity_backfill?: {
+    requested_start: string;
+    effective_start: string;
+    end: string;
+    status: string;
+    notes: string[];
+  };
+}> {
+  const response = await fetch(
+    `${API_URL}/garmin/data/backfill/smart?user_id=${userId}&days=${days}`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Smart backfill failed (${response.status}): ${body}`);
+  }
+  return response.json();
+}
+
 export async function fetchWeeklyAnalysis(userId: number): Promise<WeeklyAnalysis> {
   return getJson<WeeklyAnalysis>(`/garmin/analysis/weekly?user_id=${userId}`);
 }

@@ -6,6 +6,7 @@ import logging
 import requests
 import time
 import json
+import re
 from datetime import datetime, timedelta
 
 from app.config import settings
@@ -17,6 +18,7 @@ from app.database.models import GarminActivityData, GarminToken, OAuthSession
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/garmin", tags=["garmin"])
+MIN_START_TIME_PATTERN = re.compile(r"before min start time of ([0-9T:\.\-]+Z)")
 
 
 def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> int:
@@ -64,6 +66,72 @@ def summarize_activities(activities: list[GarminActivityData]) -> Dict:
         "running_average_heart_rate": round(sum(running_hr_values) / len(running_hr_values), 1) if running_hr_values else None,
         "cycling_average_heart_rate": round(sum(cycling_hr_values) / len(cycling_hr_values), 1) if cycling_hr_values else None,
     }
+
+
+def parse_min_start_time_from_error(error_message: str) -> Optional[datetime]:
+    """Extract Garmin minimum backfill start time from API error text."""
+    match = MIN_START_TIME_PATTERN.search(error_message)
+    if not match:
+        return None
+
+    iso_value = match.group(1).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(iso_value)
+        return dt.replace(tzinfo=None) if dt.tzinfo else dt
+    except ValueError:
+        return None
+
+
+def request_activity_backfill_with_fallback(
+    client: GarminAPIClient,
+    start: datetime,
+    end: datetime,
+) -> Dict:
+    """Request activity backfill and auto-adjust when Garmin rejects old start date."""
+    result = {
+        "requested_start": start.isoformat(),
+        "effective_start": start.isoformat(),
+        "end": end.isoformat(),
+        "status": "requested",
+        "notes": [],
+    }
+
+    try:
+        client.backfill_activities(start, end)
+        return result
+    except Exception as exc:
+        error_text = str(exc)
+
+        if "duplicate backfill processed" in error_text:
+            result["status"] = "duplicate"
+            result["notes"].append("Garmin reported this range was already processed.")
+            return result
+
+        min_start = parse_min_start_time_from_error(error_text)
+        if not min_start:
+            raise
+
+        adjusted_start = max(start, min_start + timedelta(seconds=1))
+        if adjusted_start >= end:
+            result["status"] = "skipped"
+            result["effective_start"] = adjusted_start.isoformat()
+            result["notes"].append("Requested window is older than Garmin's allowed minimum start time.")
+            return result
+
+        result["status"] = "requested_with_adjusted_start"
+        result["effective_start"] = adjusted_start.isoformat()
+        result["notes"].append("Adjusted start date to Garmin minimum allowed backfill timestamp.")
+
+        try:
+            client.backfill_activities(adjusted_start, end)
+            return result
+        except Exception as second_exc:
+            second_error_text = str(second_exc)
+            if "duplicate backfill processed" in second_error_text:
+                result["status"] = "duplicate"
+                result["notes"].append("Garmin reported this adjusted range was already processed.")
+                return result
+            raise
 
 
 def build_weekly_activity_trend(activities: list[GarminActivityData]) -> list[Dict]:
@@ -265,6 +333,20 @@ async def oauth_callback(
         # Get user permissions
         access_token = token_data['access_token']
         permissions = oauth_service.get_user_permissions(access_token)
+
+        # Kick off an initial historical backfill attempt after connect.
+        try:
+            client = GarminAPIClient(db, user_id)
+            backfill_end = datetime.utcnow()
+            backfill_start = backfill_end - timedelta(days=120)
+            backfill_result = request_activity_backfill_with_fallback(
+                client=client,
+                start=backfill_start,
+                end=backfill_end,
+            )
+            logger.info(f"Initial activity backfill requested after OAuth: {backfill_result}")
+        except Exception as backfill_exc:
+            logger.warning(f"Initial activity backfill after OAuth failed: {backfill_exc}")
 
         # Redirect the user back to the web app after successful OAuth.
         from fastapi.responses import HTMLResponse
@@ -568,16 +650,52 @@ async def request_backfill(
         if data_type in ["dailies", "both"]:
             client.backfill_dailies(start, end)
 
+        activity_backfill = None
         if data_type in ["activities", "both"]:
-            client.backfill_activities(start, end)
+            activity_backfill = request_activity_backfill_with_fallback(
+                client=client,
+                start=start,
+                end=end,
+            )
 
         return {
             "status": "success",
-            "message": f"Backfill requested for {data_type} from {start_date} to {end_date}. Data will be sent via webhooks."
+            "message": f"Backfill requested for {data_type} from {start_date} to {end_date}. Data will be sent via webhooks.",
+            "activity_backfill": activity_backfill,
         }
 
     except Exception as e:
         logger.error(f"Backfill request failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/data/backfill/smart")
+async def request_smart_activity_backfill(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    days: int = Query(120, ge=7, le=180, description="How many days of activity history to request"),
+    db: Session = Depends(get_db),
+):
+    """Request activity backfill with automatic Garmin minimum-date fallback."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        client = GarminAPIClient(db, resolved_user_id)
+
+        end = datetime.utcnow()
+        start = end - timedelta(days=days)
+        activity_backfill = request_activity_backfill_with_fallback(
+            client=client,
+            start=start,
+            end=end,
+        )
+
+        return {
+            "status": "success",
+            "message": "Smart activity backfill requested. Data will arrive via activity webhooks.",
+            "activity_backfill": activity_backfill,
+        }
+    except Exception as e:
+        logger.error(f"Smart backfill request failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

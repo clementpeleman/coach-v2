@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchGarminActivities,
+  requestSmartActivityBackfill,
   type ActivitiesResponse,
   type GarminActivity,
 } from "@/lib/api";
@@ -16,6 +17,9 @@ export default function ActivitiesPage() {
   const [activityData, setActivityData] = useState<ActivitiesResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const smartBackfillTriggered = useRef(false);
 
   useEffect(() => {
     if (!session.resolved || !userId) {
@@ -26,12 +30,20 @@ export default function ActivitiesPage() {
       try {
         setLoading(true);
         setError(null);
+        if (periodDays >= 90 && !smartBackfillTriggered.current) {
+          setSyncing(true);
+          const syncResult = await requestSmartActivityBackfill(userId, 120);
+          const extraNote = syncResult.activity_backfill?.notes?.join(" ") ?? "";
+          setSyncMessage(`${syncResult.message} ${extraNote}`.trim());
+          smartBackfillTriggered.current = true;
+        }
         const result = await fetchGarminActivities(userId, 500, periodDays);
         setActivityData(result);
         setActivities(result.activities);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "Onbekende fout");
       } finally {
+        setSyncing(false);
         setLoading(false);
       }
     };
@@ -103,7 +115,31 @@ export default function ActivitiesPage() {
               {days === 30 ? "1 maand" : "3 maanden"}
             </button>
           ))}
+          <button
+            onClick={async () => {
+              if (!userId) {
+                return;
+              }
+              try {
+                setSyncing(true);
+                const syncResult = await requestSmartActivityBackfill(userId, 120);
+                const extraNote = syncResult.activity_backfill?.notes?.join(" ") ?? "";
+                setSyncMessage(`${syncResult.message} ${extraNote}`.trim());
+                const refreshed = await fetchGarminActivities(userId, 500, periodDays);
+                setActivityData(refreshed);
+                setActivities(refreshed.activities);
+              } catch (syncError) {
+                setError(syncError instanceof Error ? syncError.message : "Sync mislukt.");
+              } finally {
+                setSyncing(false);
+              }
+            }}
+            className="rounded-md border border-emerald-400 bg-emerald-50 px-3 py-1.5 text-sm text-emerald-800"
+          >
+            {syncing ? "Sync bezig..." : "Force sync 4 maanden"}
+          </button>
         </div>
+        {syncMessage ? <p className="mt-2 text-xs text-slate-600">{syncMessage}</p> : null}
       </div>
 
       {error ? <p className="text-sm text-rose-700">{error}</p> : null}
