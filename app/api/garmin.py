@@ -553,13 +553,14 @@ async def list_activities(
 async def weekly_analysis(
     user_id: Optional[int] = Query(None, description="Internal user ID"),
     telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    days: int = Query(7, ge=1, le=90, description="Window size in days"),
     db: Session = Depends(get_db)
 ):
-    """Return weekly training summary and baseline comparison."""
+    """Return training summary for a given window and baseline comparison."""
     try:
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         now = datetime.utcnow()
-        current_start = now - timedelta(days=7)
+        current_start = now - timedelta(days=days)
         baseline_start = current_start - timedelta(days=28)
 
         activities = db.query(GarminActivityData).filter(
@@ -613,7 +614,30 @@ async def weekly_analysis(
             hr_delta=hr_delta,
         )
 
+        highlights = []
+        if load_ratio is not None:
+            if load_ratio > 1.25:
+                highlights.append({"type": "warning", "label": "Hoge belasting", "text": f"Load ratio {load_ratio}x — plan extra herstel"})
+            elif load_ratio < 0.75:
+                highlights.append({"type": "info", "label": "Lage belasting", "text": f"Load ratio {load_ratio}x — ruimte om op te bouwen"})
+            else:
+                highlights.append({"type": "success", "label": "Gebalanceerd", "text": f"Load ratio {load_ratio}x — goed bezig"})
+
+        if hr_delta is not None:
+            if hr_delta > 3:
+                highlights.append({"type": "warning", "label": "Hartslag stijgt", "text": f"+{hr_delta} bpm vs baseline"})
+            elif hr_delta < -3:
+                highlights.append({"type": "success", "label": "Hartslag daalt", "text": f"{hr_delta} bpm vs baseline"})
+
+        if current_metrics["running_sessions"] > 0 or current_metrics["cycling_sessions"] > 0:
+            highlights.append({
+                "type": "info",
+                "label": "Verdeling",
+                "text": f"{current_metrics['running_sessions']} run · {current_metrics['cycling_sessions']} fiets",
+            })
+
         return {
+            "days": days,
             "window": {
                 "current_start": current_start.isoformat(),
                 "current_end": now.isoformat(),
@@ -626,6 +650,7 @@ async def weekly_analysis(
             "load_ratio": load_ratio,
             "insight": recommendation,
             "summary": weekly_summary,
+            "highlights": highlights,
         }
     except Exception as e:
         logger.error(f"Weekly analysis failed: {e}")

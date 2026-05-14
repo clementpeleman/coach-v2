@@ -12,7 +12,16 @@ import {
 import { useSessionUserId } from "@/lib/session";
 import MetricCard from "@/components/metric-card";
 import SportBadge from "@/components/sport-badge";
-import { Heart, Clock, Route, Flame, TrendingUp, TrendingDown, ArrowRight, Zap } from "lucide-react";
+import {
+  Heart, Clock, Route, Flame, ArrowRight, Zap,
+  AlertTriangle, CheckCircle2, Info,
+} from "lucide-react";
+
+const PERIODS = [
+  { label: "7d", days: 7 },
+  { label: "14d", days: 14 },
+  { label: "30d", days: 30 },
+] as const;
 
 export default function DashboardPage() {
   const session = useSessionUserId();
@@ -21,6 +30,7 @@ export default function DashboardPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [activities, setActivities] = useState<GarminActivity[]>([]);
   const [weeklyAnalysis, setWeeklyAnalysis] = useState<WeeklyAnalysis | null>(null);
+  const [periodDays, setPeriodDays] = useState(7);
 
   useEffect(() => {
     if (session.resolved && userId) {
@@ -37,17 +47,17 @@ export default function DashboardPage() {
         setAuthenticated(status.authenticated);
         if (status.authenticated) {
           const [data, analysis] = await Promise.all([
-            fetchGarminActivities(userId, 5),
-            fetchWeeklyAnalysis(userId),
+            fetchGarminActivities(userId, 5, periodDays),
+            fetchWeeklyAnalysis(userId, periodDays),
           ]);
           setActivities(data.activities);
           setWeeklyAnalysis(analysis);
         }
-      } catch { /* handled by empty state */ }
+      } catch { /* empty state handles this */ }
       setLoading(false);
     };
     void load();
-  }, [session.resolved, userId]);
+  }, [session.resolved, userId, periodDays]);
 
   if (!session.resolved || loading) {
     return (
@@ -84,32 +94,41 @@ export default function DashboardPage() {
 
   const week = weeklyAnalysis?.current_week;
   const deltas = weeklyAnalysis?.deltas;
+  const highlights = weeklyAnalysis?.highlights ?? [];
   const lastActivity = activities[0] ?? null;
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      {/* Header met periode selector */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5">
+          {PERIODS.map((p) => (
+            <button
+              key={p.days}
+              onClick={() => setPeriodDays(p.days)}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                periodDays === p.days
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      {/* Coach samenvatting */}
-      {weeklyAnalysis?.summary && (
-        <div className="rounded-xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-5">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 rounded-lg bg-emerald-100 p-2">
-              {weeklyAnalysis.load_ratio != null && weeklyAnalysis.load_ratio > 1.1 ? (
-                <TrendingUp className="h-4 w-4 text-emerald-700" />
-              ) : (
-                <TrendingDown className="h-4 w-4 text-emerald-700" />
-              )}
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-emerald-900">Weekoverzicht</p>
-              <p className="mt-1 text-sm leading-relaxed text-emerald-800">{weeklyAnalysis.summary}</p>
-            </div>
-          </div>
+      {/* Visuele highlights */}
+      {highlights.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {highlights.map((h, i) => (
+            <HighlightChip key={i} type={h.type} label={h.label} text={h.text} />
+          ))}
         </div>
       )}
 
-      {/* Weekmetrics */}
+      {/* Metrics */}
       {week && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <MetricCard
@@ -118,7 +137,6 @@ export default function DashboardPage() {
             icon={<Flame className="h-4 w-4" />}
             trend={deltas?.sessions_percent != null ? (deltas.sessions_percent > 0 ? "up" : deltas.sessions_percent < 0 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.sessions_percent != null ? `${deltas.sessions_percent > 0 ? "+" : ""}${deltas.sessions_percent}%` : undefined}
-            sub="deze week"
           />
           <MetricCard
             label="Afstand"
@@ -126,7 +144,6 @@ export default function DashboardPage() {
             icon={<Route className="h-4 w-4" />}
             trend={deltas?.distance_percent != null ? (deltas.distance_percent > 0 ? "up" : deltas.distance_percent < 0 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.distance_percent != null ? `${deltas.distance_percent > 0 ? "+" : ""}${deltas.distance_percent}%` : undefined}
-            sub="vs vorige weken"
           />
           <MetricCard
             label="Duur"
@@ -134,7 +151,6 @@ export default function DashboardPage() {
             icon={<Clock className="h-4 w-4" />}
             trend={deltas?.duration_percent != null ? (deltas.duration_percent > 0 ? "up" : deltas.duration_percent < 0 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.duration_percent != null ? `${deltas.duration_percent > 0 ? "+" : ""}${deltas.duration_percent}%` : undefined}
-            sub="vs vorige weken"
           />
           <MetricCard
             label="Gem. hartslag"
@@ -142,7 +158,6 @@ export default function DashboardPage() {
             icon={<Heart className="h-4 w-4" />}
             trend={deltas?.avg_heart_rate_delta != null ? (deltas.avg_heart_rate_delta > 2 ? "up" : deltas.avg_heart_rate_delta < -2 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.avg_heart_rate_delta != null ? `${deltas.avg_heart_rate_delta > 0 ? "+" : ""}${deltas.avg_heart_rate_delta} bpm` : undefined}
-            sub="vs baseline"
           />
         </div>
       )}
@@ -153,7 +168,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">Laatste activiteit</h2>
             <Link href="/activiteiten" className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700">
-              Alle activiteiten <ArrowRight className="h-3 w-3" />
+              Alles bekijken <ArrowRight className="h-3 w-3" />
             </Link>
           </div>
           <div className="mt-4 flex items-center gap-4">
@@ -203,6 +218,24 @@ export default function DashboardPage() {
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+function HighlightChip({ type, label, text }: { type: string; label: string; text: string }) {
+  const styles = {
+    success: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    warning: "border-amber-200 bg-amber-50 text-amber-800",
+    info: "border-blue-200 bg-blue-50 text-blue-800",
+  }[type] ?? "border-slate-200 bg-slate-50 text-slate-800";
+
+  const Icon = type === "warning" ? AlertTriangle : type === "success" ? CheckCircle2 : Info;
+
+  return (
+    <div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 ${styles}`}>
+      <Icon className="h-3.5 w-3.5" />
+      <span className="text-xs font-semibold">{label}</span>
+      <span className="text-xs opacity-75">{text}</span>
     </div>
   );
 }

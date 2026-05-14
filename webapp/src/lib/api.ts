@@ -96,6 +96,12 @@ export type WeeklyAnalysis = {
   load_ratio: number | null;
   insight: string;
   summary: string;
+  highlights: Array<{
+    type: "success" | "warning" | "info";
+    label: string;
+    text: string;
+  }>;
+  days: number;
 };
 
 async function getJson<T>(path: string): Promise<T> {
@@ -149,8 +155,8 @@ export async function requestSmartActivityBackfill(
   return response.json();
 }
 
-export async function fetchWeeklyAnalysis(userId: number): Promise<WeeklyAnalysis> {
-  return getJson<WeeklyAnalysis>(`/garmin/analysis/weekly?user_id=${userId}`);
+export async function fetchWeeklyAnalysis(userId: number, days = 7): Promise<WeeklyAnalysis> {
+  return getJson<WeeklyAnalysis>(`/garmin/analysis/weekly?user_id=${userId}&days=${days}`);
 }
 
 export async function loginWebUser(email: string, displayName?: string): Promise<{
