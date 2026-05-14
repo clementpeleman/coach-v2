@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { getGarminAuthStartUrl, loginWebUser } from "@/lib/api";
+import { getGarminAuthStartUrl, loginWebUser, startDirectGarminOAuth } from "@/lib/api";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -37,12 +37,34 @@ export default function LoginPage() {
     }
   };
 
+  const handleDirectGarminConnect = async () => {
+    try {
+      setLoading(true);
+      setSavedMessage("");
+      const response = await startDirectGarminOAuth({
+        email: hasValidEmail ? email : undefined,
+        displayName: displayName || undefined,
+      });
+      window.localStorage.setItem("sportsHubUserId", String(response.user_id));
+      setResolvedUserId(response.user_id);
+      window.location.href = response.authorization_url;
+    } catch (error) {
+      setSavedMessage(error instanceof Error ? error.message : "Directe Garmin OAuth start mislukt.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-6">
       <h1 className="text-2xl font-semibold">Login & Garmin koppeling</h1>
       <p className="mt-2 text-sm text-slate-600">
         Log in met je email. De app maakt of hergebruikt je interne user account en gebruikt
         daarna die user ID voor Garmin OAuth.
+      </p>
+      <p className="mt-1 text-sm text-slate-600">
+        Sneller: klik direct op <b>Connect Garmin direct</b> om zonder aparte login meteen te
+        starten met Garmin OAuth.
       </p>
 
       <div className="mt-6 max-w-sm">
@@ -70,11 +92,18 @@ export default function LoginPage() {
         />
         <div className="mt-3 flex gap-2">
           <button
+            onClick={handleDirectGarminConnect}
+            disabled={loading}
+            className="rounded-md bg-emerald-600 px-4 py-2 text-sm text-white"
+          >
+            {loading ? "Bezig..." : "Connect Garmin direct"}
+          </button>
+          <button
             onClick={handleLogin}
             disabled={loading}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm text-white"
+            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900"
           >
-            {loading ? "Bezig..." : "Login"}
+            {loading ? "Bezig..." : "Login met email"}
           </button>
           <a
             href={canConnectGarmin ? getGarminAuthStartUrl(resolvedUserId) : "#"}

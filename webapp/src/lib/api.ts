@@ -110,6 +110,27 @@ export async function fetchWebUser(userId: number): Promise<WebUser> {
   return getJson<WebUser>(`/web/auth/me?user_id=${userId}`);
 }
 
+export async function startDirectGarminOAuth(payload: {
+  email?: string;
+  displayName?: string;
+}): Promise<{ user_id: number; authorization_url: string; state: string }> {
+  const response = await fetch(`${API_URL}/web/auth/garmin/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: payload.email || null,
+      display_name: payload.displayName || null,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Garmin OAuth start failed (${response.status}): ${body}`);
+  }
+
+  return response.json();
+}
+
 export async function sendChatMessage(payload: {
   userId: number;
   message: string;

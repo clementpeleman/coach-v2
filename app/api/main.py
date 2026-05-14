@@ -33,6 +33,7 @@ def read_root():
             "garmin_activities": "/garmin/activities",
             "garmin_weekly_analysis": "/garmin/analysis/weekly",
             "web_login": "/web/auth/login",
+            "web_garmin_direct_start": "/web/auth/garmin/start",
             "web_me": "/web/auth/me",
             "web_chat": "/web/chat",
             "health_webhook": "/garmin/webhook/health",
