@@ -42,6 +42,16 @@ services:
       db:
         condition: service_healthy
 
+  frontend:
+    image: nginx:alpine
+    container_name: coach_frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ./Floating Coach:/usr/share/nginx/html:ro
+    depends_on:
+      - app
+
   bot:
     build: .
     container_name: coach_bot
