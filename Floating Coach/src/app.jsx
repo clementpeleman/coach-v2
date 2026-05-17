@@ -63,6 +63,27 @@ function App() {
     } catch (_) {}
   }, [chatStorageKey, chatMessages]);
 
+  useEffectApp(() => {
+    const openCoachWithMessages = (messagesOrEvent) => {
+      const incoming = Array.isArray(messagesOrEvent)
+        ? messagesOrEvent
+        : messagesOrEvent?.detail;
+      if (!Array.isArray(incoming) || !incoming.length) {
+        setScreen('chat');
+        return;
+      }
+      setChatThinking(false);
+      setChatMessages((current) => appendUniqueChatMessages(current || window.FC_DATA.chatSeed, incoming));
+      setScreen('chat');
+    };
+    window.FC_OPEN_COACH_MESSAGES = openCoachWithMessages;
+    window.addEventListener('fc-open-chat-messages', openCoachWithMessages);
+    return () => {
+      window.removeEventListener('fc-open-chat-messages', openCoachWithMessages);
+      if (window.FC_OPEN_COACH_MESSAGES === openCoachWithMessages) delete window.FC_OPEN_COACH_MESSAGES;
+    };
+  }, []);
+
   // Live Garmin health snapshot for recovery, sleep, stress, HRV and body battery.
   useEffectApp(() => {
     setRecoverySnapshot(null);
@@ -282,6 +303,12 @@ function readStoredChat(key) {
     }
   } catch (_) {}
   return window.FC_DATA.chatSeed;
+}
+
+function appendUniqueChatMessages(messages, additions) {
+  const existingIds = new Set((messages || []).map((message) => message.id).filter(Boolean));
+  const unique = additions.filter((message) => !message.id || !existingIds.has(message.id));
+  return [...(messages || []), ...unique];
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);

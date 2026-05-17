@@ -28,6 +28,23 @@ function ChatScreen({
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, thinking]);
 
+  useEffectC(() => {
+    let pending = null;
+    try {
+      const raw = window.sessionStorage.getItem('fc_pending_chat_messages');
+      if (raw) {
+        pending = JSON.parse(raw);
+        window.sessionStorage.removeItem('fc_pending_chat_messages');
+      }
+    } catch (_) {}
+    if (!Array.isArray(pending) || !pending.length) return;
+    setMessages((current) => {
+      const existingIds = new Set((current || []).map((message) => message.id).filter(Boolean));
+      const unique = pending.filter((message) => !message.id || !existingIds.has(message.id));
+      return [...(current || D.chatSeed), ...unique];
+    });
+  }, []);
+
   const send = async (text) => {
     const t = (text || draft).trim();
     if (!t) return;

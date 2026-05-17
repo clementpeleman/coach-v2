@@ -10,7 +10,7 @@ const SPORT_OPTIONS = [
   { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo', targetText: 'zwemtempo' },
 ];
 
-function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingProfile }) {
+function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingProfile, setChatMessages, setChatThinking }) {
   const D = window.FC_DATA;
   const online = apiStatus === 'online';
   const activityQuery = window.useLiveData(
@@ -40,6 +40,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const [sportTouched, setSportTouched] = useStateW(false);
   const [targetMode, setTargetMode] = useStateW('pace');
   const [intensityPct, setIntensityPct] = useStateW(100);
+  const [selectedBlockIndex, setSelectedBlockIndex] = useStateW(0);
+  const [editedBlocks, setEditedBlocks] = useStateW([]);
+  const [manualEdits, setManualEdits] = useStateW(false);
   useEffectW(() => {
     if (!sportTouched && patternSportKey) setSportType(patternSportKey);
   }, [patternSportKey, sportTouched]);
@@ -51,9 +54,23 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const primaryTargetLabel = selectedSport.targetLabel;
   const primaryTargetText = selectedSport.targetText;
   const baseBlocks = buildStructure(rec.type, sportType, personalSportProfile, patternForType);
-  const blocks = patternForType?.typical_duration_min
+  const defaultBlocks = patternForType?.typical_duration_min
     ? fitBlocksToDuration(baseBlocks, plannedDuration)
     : baseBlocks;
+  const defaultBlocksKey = [
+    rec.type,
+    sportType,
+    patternForType?.typical_structure || 'default',
+    patternForType?.typical_duration_min || 'default',
+    personalSportProfile?.sessions || 0,
+    detailSegments,
+  ].join('|');
+  useEffectW(() => {
+    setEditedBlocks(defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index)));
+    setSelectedBlockIndex(0);
+    setManualEdits(false);
+  }, [defaultBlocksKey]);
+  const blocks = editedBlocks.length ? editedBlocks : defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index));
   const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
   const adjustedBlocks = blocks.map((block) => ({
     ...block,
@@ -69,6 +86,67 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const getPrimaryTarget = (block) => (
     selectedSport.metric === 'speed' ? block.adjustedSpeed : block.adjustedPace
   ) || 'vrij';
+  const selectedBlock = blocks[Math.min(selectedBlockIndex, blocks.length - 1)] || blocks[0];
+  const selectedAdjustedBlock = adjustedBlocks[Math.min(selectedBlockIndex, adjustedBlocks.length - 1)] || adjustedBlocks[0];
+  const updateSelectedBlock = (patch) => {
+    setEditedBlocks((current) => {
+      const source = current.length ? current : blocks;
+      return source.map((block, index) => (
+        index === selectedBlockIndex ? { ...block, ...patch } : block
+      ));
+    });
+    setManualEdits(true);
+  };
+  const updateSelectedDuration = (minutes) => {
+    const nextMinutes = Math.min(240, Math.max(1, Number(minutes) || 1));
+    updateSelectedBlock({ sec: Math.round(nextMinutes * 60) });
+  };
+  const adjustSelectedDuration = (deltaMin) => {
+    updateSelectedDuration(Math.round((selectedBlock?.sec || 60) / 60) + deltaMin);
+  };
+  const resetBlocks = () => {
+    setEditedBlocks(defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index)));
+    setSelectedBlockIndex(0);
+    setManualEdits(false);
+  };
+  const openCoachEditor = () => {
+    const workoutSummary = adjustedBlocks.map((block, index) => {
+      const primary = selectedSport.metric === 'speed' ? block.adjustedSpeed : block.adjustedPace;
+      return `${index + 1}. ${block.label}: ${Math.round(block.sec / 60)} min, ${block.zone}, ${primaryTargetLabel} ${primary || 'vrij'}, HR ${block.adjustedHr || 'vrij'}`;
+    });
+    const patternText = patternForType
+      ? `Gebaseerd op je patroon voor ${rec.type}: ${patternForType.typical_structure || 'continu'}, meestal ${sportLabelFromKey(patternForType.preferred_sport)}.`
+      : 'Er is weinig patroondata, dus dit start van de standaardstructuur.';
+    const pendingId = `workout-edit-${Date.now()}`;
+    const content = [
+      'Bewerk deze training met mij.',
+      `Type: ${rec.type}. Sport: ${selectedSport.label}. Recovery: ${recoveryScore}/6. Intensiteit: ${intensityPct}%.`,
+      patternText,
+      '',
+      ...workoutSummary,
+    ].map(escapeHtml).join('<br/>');
+    const pendingMessages = [
+      { id: `${pendingId}-user`, role: 'user', content, time: FCUW.fmtTime(new Date().toISOString()), source: 'workout-editor' },
+      {
+        id: `${pendingId}-assistant`,
+        role: 'assistant',
+        content: 'Ik heb je huidige training erbij. Zeg gerust wat je wil wijzigen: korter, langer, rustiger, zwaarder, andere sport of andere blokken.',
+        time: FCUW.fmtTime(new Date().toISOString()),
+        source: 'workout-editor',
+      },
+    ];
+    try {
+      window.sessionStorage.setItem('fc_pending_chat_messages', JSON.stringify(pendingMessages));
+    } catch (_) {}
+    if (typeof window.FC_OPEN_COACH_MESSAGES === 'function') {
+      window.FC_OPEN_COACH_MESSAGES(pendingMessages);
+      return;
+    }
+    window.dispatchEvent?.(new CustomEvent('fc-open-chat-messages', { detail: pendingMessages }));
+    setChatThinking?.(false);
+    setChatMessages?.((messages) => appendUniqueMessages(messages || window.FC_DATA.chatSeed, pendingMessages));
+    onNavigate?.('chat');
+  };
 
   return (
     <div data-screen-label="Workout detail" className="col" style={{ gap: 24 }}>
@@ -202,30 +280,180 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
           </div>
           <div style={{ display: 'flex', gap: 3, height: 48 }}>
             {blocks.map((b, i) => (
-              <div key={i} title={`${b.label} · ${Math.round(b.sec/60)} min`}
+              <button key={b.id || i} title={`${b.label} · ${Math.round(b.sec/60)} min`}
+                onClick={() => setSelectedBlockIndex(i)}
                 style={{
                   flex: b.sec / totalSec,
                   background: b.color,
                   borderRadius: 3,
                   position: 'relative',
-                  opacity: .82,
+                  opacity: selectedBlockIndex === i ? 1 : .72,
+                  border: selectedBlockIndex === i ? '2px solid #fff' : '1px solid rgba(255,255,255,.12)',
+                  boxShadow: selectedBlockIndex === i ? '0 0 0 3px rgba(191,255,54,.22)' : 'none',
+                  cursor: 'pointer',
+                  minWidth: 10,
                 }}>
-              </div>
+              </button>
             ))}
           </div>
           <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
             {blocks.map((b, i) => (
-              <div key={i} style={{ flex: b.sec / totalSec, textAlign: 'center' }}>
+              <button key={b.id || i} onClick={() => setSelectedBlockIndex(i)}
+                style={{ flex: b.sec / totalSec, textAlign: 'center', background: 'transparent',
+                  border: 0, padding: 0, cursor: 'pointer' }}>
                 {b.sec / totalSec > 0.04 && (
                   <span className="mono" style={{ fontSize: 9, color: 'oklch(72% 0.01 100)',
                     textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     {b.shortLabel}
                   </span>
                 )}
-              </div>
+              </button>
             ))}
           </div>
         </div>
+
+        {selectedBlock && (
+          <div style={{
+            marginTop: 24,
+            paddingTop: 20,
+            borderTop: '1px solid oklch(32% 0.005 100)',
+            display: 'grid',
+            gridTemplateColumns: '1.1fr 1.2fr 1fr',
+            gap: 18,
+            alignItems: 'start',
+          }}>
+            <div>
+              <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
+                textTransform: 'uppercase', letterSpacing: '.16em', marginBottom: 8 }}>
+                Geselecteerd blok
+              </div>
+              <input value={selectedBlock.label}
+                onChange={(e) => updateSelectedBlock({
+                  label: e.target.value,
+                  shortLabel: makeShortLabel(e.target.value),
+                })}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  border: '1px solid oklch(36% 0.005 100)',
+                  background: 'oklch(18% 0.005 100)',
+                  color: '#fff',
+                  borderRadius: 10,
+                  padding: '11px 12px',
+                  fontSize: 15,
+                }} />
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 8, marginTop: 10 }}>
+                <button className="btn ghost" onClick={() => adjustSelectedDuration(-1)}
+                  style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center' }}>-1</button>
+                <label>
+                  <span className="mono" style={{ display: 'block', fontSize: 9, color: 'oklch(70% 0.01 100)',
+                    textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
+                    Lengte in minuten
+                  </span>
+                  <input type="number" min="1" max="240" value={Math.round(selectedBlock.sec / 60)}
+                    onChange={(e) => updateSelectedDuration(e.target.value)}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      border: '1px solid oklch(36% 0.005 100)',
+                      background: 'oklch(18% 0.005 100)',
+                      color: '#fff',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      fontSize: 15,
+                      textAlign: 'center',
+                    }} />
+                </label>
+                <button className="btn ghost" onClick={() => adjustSelectedDuration(1)}
+                  style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center' }}>+1</button>
+              </div>
+            </div>
+
+            <div>
+              <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
+                textTransform: 'uppercase', letterSpacing: '.16em', marginBottom: 8 }}>
+                Intensiteitszone
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 6 }}>
+                {['Z1', 'Z2', 'Z3', 'Z4', 'Z5'].map((zone) => (
+                  <button key={zone} onClick={() => updateSelectedBlock({ zone, color: zoneColor(zone) })}
+                    className={selectedBlock.zone === zone ? 'btn accent' : 'btn ghost'}
+                    style={{ justifyContent: 'center', color: selectedBlock.zone === zone ? undefined : '#fff',
+                      borderColor: selectedBlock.zone === zone ? undefined : 'oklch(35% 0.005 100)',
+                      padding: '9px 6px' }}>
+                    {zone}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 12 }}>
+                <label>
+                  <span className="mono" style={{ display: 'block', fontSize: 9, color: 'oklch(70% 0.01 100)',
+                    textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
+                    {primaryTargetLabel}
+                  </span>
+                  <input value={selectedSport.metric === 'speed' ? (selectedBlock.speed || '') : (selectedBlock.pace || '')}
+                    onChange={(e) => updateSelectedBlock(selectedSport.metric === 'speed'
+                      ? { speed: e.target.value }
+                      : { pace: e.target.value })}
+                    placeholder={selectedSport.metric === 'speed' ? '24-28 km/u' : '5:55-6:35/km'}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      border: '1px solid oklch(36% 0.005 100)',
+                      background: 'oklch(18% 0.005 100)',
+                      color: '#fff',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      fontSize: 14,
+                    }} />
+                </label>
+                <label>
+                  <span className="mono" style={{ display: 'block', fontSize: 9, color: 'oklch(70% 0.01 100)',
+                    textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
+                    HR check
+                  </span>
+                  <input value={selectedBlock.hr || ''}
+                    onChange={(e) => updateSelectedBlock({ hr: e.target.value })}
+                    placeholder="138-152"
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      border: '1px solid oklch(36% 0.005 100)',
+                      background: 'oklch(18% 0.005 100)',
+                      color: '#fff',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      fontSize: 14,
+                    }} />
+                </label>
+              </div>
+              <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)', marginTop: 8,
+                letterSpacing: '.08em' }}>
+                Nu: {Math.round(selectedBlock.sec / 60)} min · {selectedAdjustedBlock?.zone} · {getPrimaryTarget(selectedAdjustedBlock || selectedBlock)} · HR {selectedAdjustedBlock?.adjustedHr}
+              </div>
+            </div>
+
+            <div>
+              <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
+                textTransform: 'uppercase', letterSpacing: '.16em', marginBottom: 8 }}>
+                Hulp
+              </div>
+              <button className="btn accent" onClick={openCoachEditor}
+                style={{ width: '100%', justifyContent: 'center' }}>
+                Bewerk met Coach AI <span className="arrow">→</span>
+              </button>
+              <button className="btn ghost" onClick={resetBlocks}
+                style={{ width: '100%', justifyContent: 'center', marginTop: 8,
+                  color: '#fff', borderColor: 'oklch(35% 0.005 100)' }}>
+                Reset blokken
+              </button>
+              <p style={{ fontSize: 13, lineHeight: 1.45, color: 'oklch(78% 0.01 100)', margin: '10px 0 0' }}>
+                Klik een blok in de tijdlijn of stappenlijst. Je past alleen dit blok aan; totaalduur en Garmin-preview volgen automatisch.
+                {manualEdits ? ' Handmatige wijzigingen actief.' : ''}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 3-col details */}
@@ -241,12 +469,19 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
           <h2 style={{ marginBottom: 14 }}>Stappen</h2>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {adjustedBlocks.map((b, i) => (
-              <div key={i} style={{
+              <button key={b.id || i} onClick={() => setSelectedBlockIndex(i)} style={{
                 display: 'grid',
                 gridTemplateColumns: '34px 1fr auto auto',
                 gap: 14, alignItems: 'center',
-                padding: '14px 0',
+                padding: '14px 10px',
                 borderBottom: i < blocks.length - 1 ? '1px solid var(--line)' : 'none',
+                borderTop: 'none',
+                borderLeft: selectedBlockIndex === i ? '3px solid var(--accent)' : '3px solid transparent',
+                borderRight: 'none',
+                background: selectedBlockIndex === i ? 'var(--bg-soft)' : 'transparent',
+                borderRadius: selectedBlockIndex === i ? 10 : 0,
+                textAlign: 'left',
+                cursor: 'pointer',
               }}>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)',
                   fontVariantNumeric: 'tabular-nums' }}>
@@ -276,9 +511,11 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                   border: '1px solid var(--line)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}>
-                  <span style={{ color: 'var(--ink-4)', fontSize: 12 }}>·</span>
+                  <span style={{ color: selectedBlockIndex === i ? 'var(--accent)' : 'var(--ink-4)', fontSize: 12 }}>
+                    {selectedBlockIndex === i ? 'edit' : '...'}
+                  </span>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -322,14 +559,16 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               {patternForType
                 ? ` Structuur gebaseerd op je typische ${rec.type.toLowerCase()}-sessies: ${patternForType.typical_structure || 'continu'}, meestal ${sportLabelFromKey(patternForType.preferred_sport)}.`
                 : ' Voor de workoutstructuur gebruik ik de standaardopbouw omdat er nog weinig patroondata is.'}
-              Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
+              {' '}Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>
             <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
-              <button className="btn ghost" style={{ padding: '6px 12px', fontSize: 12 }}>
-                Vraag aanpassing
+              <button className="btn ghost" onClick={openCoachEditor}
+                style={{ padding: '6px 12px', fontSize: 12 }}>
+                Bewerk met Coach AI
               </button>
-              <button className="btn ghost" style={{ padding: '6px 12px', fontSize: 12 }}>
-                Andere training
+              <button className="btn ghost" onClick={resetBlocks}
+                style={{ padding: '6px 12px', fontSize: 12 }}>
+                Reset blokken
               </button>
             </div>
           </div>
@@ -408,6 +647,47 @@ function sportFromRecommendation(sport) {
 
 function sportLabelFromKey(key) {
   return (SPORT_OPTIONS.find((sport) => sport.key === key)?.label || key || 'deze sport').toLowerCase();
+}
+
+function cloneWorkoutBlock(block, index) {
+  return {
+    ...block,
+    id: block.id || `${index}-${block.label}-${block.sec}-${block.zone}`,
+    shortLabel: block.shortLabel || makeShortLabel(block.label),
+    color: block.color || zoneColor(block.zone),
+  };
+}
+
+function makeShortLabel(label) {
+  const clean = String(label || '').trim();
+  if (!clean) return 'Blok';
+  return clean.split(/\s+/).slice(0, 2).join(' ').slice(0, 10);
+}
+
+function zoneColor(zone) {
+  const colors = {
+    Z1: 'oklch(55% 0.06 220)',
+    Z2: 'oklch(62% 0.10 145)',
+    Z3: 'oklch(72% 0.14 100)',
+    Z4: 'oklch(75% 0.18 60)',
+    Z5: 'oklch(68% 0.22 25)',
+  };
+  return colors[zone] || colors.Z1;
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function appendUniqueMessages(messages, additions) {
+  const existingIds = new Set((messages || []).map((message) => message.id).filter(Boolean));
+  const unique = additions.filter((message) => !message.id || !existingIds.has(message.id));
+  return [...(messages || []), ...unique];
 }
 
 function parsePatternStructure(structure) {
