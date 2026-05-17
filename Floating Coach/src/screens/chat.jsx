@@ -2,10 +2,12 @@
 const { useState: useStateC, useEffect: useEffectC, useRef: useRefC } = React;
 const FCU = window.FC_UTILS;
 
-function ChatScreen({ recoveryScore, recoveryData, weather, apiStatus, userId }) {
+function ChatScreen({
+  recoveryScore, recoveryData, weather, apiStatus, userId,
+  chatMessages, setChatMessages, chatThinking, setChatThinking, resetChat,
+}) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
-  const sleepIntro = R.sleepHours ? ` en je sliep ${R.sleepHours.toFixed(1)}u` : '';
   const online = apiStatus === 'online';
   const activitiesQuery = window.useLiveData(
     (uid) => window.FC_API.fetchGarminActivities(uid, 1, 30),
@@ -14,25 +16,13 @@ function ChatScreen({ recoveryScore, recoveryData, weather, apiStatus, userId })
     { online, userId },
   );
   const recentActivity = activitiesQuery.data.activities?.[0] || D.activities[0];
-  const [messages, setMessages] = useStateC([
-    { role: 'assistant',
-      content: `Goedemorgen ${D.user.firstName}. Je <b>herstelscore is ${recoveryScore}/6</b>${sleepIntro}. Hoe voel je je vandaag?`,
-      time: '08:02' },
-  ]);
+  const messages = chatMessages || D.chatSeed;
+  const setMessages = setChatMessages;
+  const thinking = chatThinking;
+  const setThinking = setChatThinking;
   const [draft, setDraft] = useStateC('');
-  const [thinking, setThinking] = useStateC(false);
   const [lastError, setLastError] = useStateC(null);
   const scrollRef = useRefC(null);
-
-  useEffectC(() => {
-    setMessages((current) => {
-      if (current.length !== 1 || current[0].role !== 'assistant') return current;
-      return [{
-        ...current[0],
-        content: `Goedemorgen ${D.user.firstName}. Je <b>herstelscore is ${recoveryScore}/6</b>${sleepIntro}. Hoe voel je je vandaag?`,
-      }];
-    });
-  }, [recoveryScore, sleepIntro]);
 
   useEffectC(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -55,7 +45,14 @@ function ChatScreen({ recoveryScore, recoveryData, weather, apiStatus, userId })
           message: t,
           // The backend keeps its own state — we still pass history to seed context.
           history: messages.map((m) => ({ role: m.role, content: m.content })),
-          context: { weather },
+          context: {
+            weather,
+            recovery: {
+              score: recoveryScore,
+              label: FCU.recoveryLabel(recoveryScore),
+              metrics: R,
+            },
+          },
         });
         setMessages((m) => [...m, {
           role: 'assistant', content: res.reply,
@@ -116,7 +113,7 @@ function ChatScreen({ recoveryScore, recoveryData, weather, apiStatus, userId })
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn ghost" style={{ padding: '8px 12px', fontSize: 12 }}>
+            <button onClick={resetChat} className="btn ghost" style={{ padding: '8px 12px', fontSize: 12 }}>
               <span className="mono">↻</span> Nieuw gesprek
             </button>
           </div>

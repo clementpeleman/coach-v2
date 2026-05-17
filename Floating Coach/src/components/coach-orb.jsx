@@ -2,13 +2,14 @@
 const { useState, useEffect, useRef } = React;
 const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
-function CoachOrb({ recoveryScore, recoveryData, weather, onNavigateChat, currentScreen, apiStatus, userId }) {
+function CoachOrb({
+  recoveryScore, recoveryData, weather, onNavigateChat, currentScreen, apiStatus, userId,
+  messages, setMessages, thinking, setThinking,
+}) {
   const online = apiStatus === 'online';
   const R = recoveryData || window.FC_DATA.recovery;
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState(window.FC_DATA.chatSeed);
   const [draft, setDraft] = useState('');
-  const [thinking, setThinking] = useState(false);
   const scrollRef = useRef(null);
 
   // Track HR for the live "now" indicator inside the orb
@@ -43,7 +44,14 @@ function CoachOrb({ recoveryScore, recoveryData, weather, onNavigateChat, curren
         const res = await window.FC_API.sendChatMessage({
           userId, message: text,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
-          context: { weather },
+          context: {
+            weather,
+            recovery: {
+              score: recoveryScore,
+              label: recoveryLabel(recoveryScore),
+              metrics: R,
+            },
+          },
         });
         setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);
       } catch (e) {

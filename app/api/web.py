@@ -344,15 +344,39 @@ async def web_chat(payload: ChatRequest):
         )
         message = payload.message
         if payload.context:
+            context_lines = []
+            recovery = payload.context.get("recovery") if isinstance(payload.context, dict) else None
+            if recovery:
+                metrics = recovery.get("metrics") if isinstance(recovery.get("metrics"), dict) else {}
+                context_lines.append(
+                    "Actuele app-herstelscore: "
+                    f"{recovery.get('score')}/6"
+                    f" ({recovery.get('label') or 'label onbekend'}). "
+                    "Gebruik deze score als waarheid als oudere chatgeschiedenis of tools iets anders suggereren."
+                )
+                context_lines.append(
+                    "Actuele herstelmetrics: "
+                    f"sleepScore={metrics.get('sleepScore')}, "
+                    f"sleepHours={metrics.get('sleepHours')}, "
+                    f"bodyBattery={metrics.get('bodyBattery')}, "
+                    f"hrvOvernight={metrics.get('hrvOvernight')}, "
+                    f"restingHr={metrics.get('restingHr')}, "
+                    f"avgStress={metrics.get('avgStress')}."
+                )
             weather = payload.context.get("weather") if isinstance(payload.context, dict) else None
             if weather:
-                message = (
-                    f"CONTEXT VOOR COACH\n"
+                context_lines.append(
                     f"Weer/locatie: {weather.get('location_name') or 'locatie onbekend'}, "
                     f"{weather.get('temperature_c')}°C, {weather.get('condition')}, "
                     f"wind {weather.get('wind_speed_kmh')} km/u, "
                     f"neerslag {weather.get('precipitation_mm')} mm. "
-                    f"Trainingsnota: {weather.get('training_note')}.\n\n"
+                    f"Trainingsnota: {weather.get('training_note')}."
+                )
+            if context_lines:
+                message = (
+                    "CONTEXT VOOR COACH\n"
+                    + "\n".join(context_lines)
+                    + "\n\n"
                     f"GEBRUIKERSVRAAG\n{payload.message}"
                 )
 

@@ -10,8 +10,15 @@ function App() {
   const apiStatus = window.useApiStatus();
   const [recoverySnapshot, setRecoverySnapshot] = useStateApp(null);
   const [weather, setWeather] = useStateApp(null);
+  const chatStorageKey = `fc_chat_messages_v1_${session.userId || 'demo'}`;
   const recoveryMetrics = recoverySnapshot?.metrics || window.FC_DATA.recovery;
   const recoveryScore = recoverySnapshot?.score ?? DEFAULT_RECOVERY;
+  const [chatMessages, setChatMessages] = useStateApp(() => readStoredChat(chatStorageKey));
+  const [chatThinking, setChatThinking] = useStateApp(false);
+  const resetChat = () => {
+    setChatMessages(window.FC_DATA.chatSeed);
+    setChatThinking(false);
+  };
 
   // Initial screen: OAuth paths like /dashboard?user_id=… or stored session → dashboard
   const [screen, setScreen] = useStateApp(() => {
@@ -31,6 +38,18 @@ function App() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [apiStatus.status, session.userId]);
+
+  // Shared chat memory for both the floating coach and full Coach tab.
+  useEffectApp(() => {
+    setChatMessages(readStoredChat(chatStorageKey));
+    setChatThinking(false);
+  }, [chatStorageKey]);
+
+  useEffectApp(() => {
+    try {
+      window.localStorage.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-80)));
+    } catch (_) {}
+  }, [chatStorageKey, chatMessages]);
 
   // Live Garmin health snapshot for recovery, sleep, stress, HRV and body battery.
   useEffectApp(() => {
@@ -109,6 +128,11 @@ function App() {
     apiStatus: apiStatus.status,
     userId: session.userId,
     profile,
+    chatMessages,
+    setChatMessages,
+    chatThinking,
+    setChatThinking,
+    resetChat,
   };
 
   const userName = profile?.display_name || profile?.email || window.FC_DATA.user.name;
@@ -219,10 +243,31 @@ function App() {
                           onNavigateChat={() => setScreen('chat')}
                           currentScreen={screen}
                           apiStatus={apiStatus.status}
-                          userId={session.userId} />
+                          userId={session.userId}
+                          messages={chatMessages}
+                          setMessages={setChatMessages}
+                          thinking={chatThinking}
+                          setThinking={setChatThinking} />
       )}
     </>
   );
+}
+
+function readStoredChat(key) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || 'null');
+    if (Array.isArray(parsed) && parsed.length) {
+      return parsed
+        .filter((m) => m && typeof m.role === 'string' && typeof m.content === 'string')
+        .map((m) => ({
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content,
+          time: m.time || '',
+          source: m.source,
+        }));
+    }
+  } catch (_) {}
+  return window.FC_DATA.chatSeed;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
