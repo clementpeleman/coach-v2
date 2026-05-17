@@ -22,7 +22,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
           <h1>Herstel.<br/><em>Hoe vandaag te trainen.</em></h1>
         </div>
         <div className="meta">
-          <div>Op basis van slaap, HRV & stress</div>
+          <div>Op basis van slaap, HRV, stress & recente training</div>
           <div className="mono" style={{ marginTop: 4, color: 'var(--ink)' }}>
             <b>0—6 schaal</b>
           </div>
@@ -121,7 +121,30 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
           sub="laag-gemiddeld" contribution={22} trend="down" />
         <InputCard label="Body Battery" value={`${R.bodyBattery ?? '–'}`} unit={R.bodyBattery == null ? "" : "%"}
           sub="bij ontwaken" contribution={26} trend="up" />
+        <InputCard label="Recente training" value={`${R.recentTrainingLoad ?? '–'}`} unit={R.recentTrainingLoad == null ? "" : "load"}
+          sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel}` : "Laatste 48 uur"}
+          contribution={Math.min(100, Math.round((R.recentTrainingPenalty || 0) * 45))}
+          trend={(R.recentTrainingPenalty || 0) >= 0.8 ? "down" : "flat"} />
       </div>
+
+      {R.hardestRecentActivity && (
+        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ width: 42, height: 42, borderRadius: 10, background: 'var(--bg-soft)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>
+            {FCUR.sportIcon(R.hardestRecentActivity.activity_type)}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div className="label" style={{ marginBottom: 4 }}>Waarom deze score?</div>
+            <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+              Recente belasting weegt mee: <b>{R.hardestRecentActivity.activity_name || FCUR.sportLabel(R.hardestRecentActivity.activity_type)}</b>
+              {' '}({R.hardestRecentActivity.duration_minutes} min, gem. HR {R.hardestRecentActivity.average_heart_rate ?? '–'},
+              max HR {R.hardestRecentActivity.max_heart_rate ?? '–'}) verlaagt je score tijdelijk met
+              {' '}<b>{(R.recentTrainingPenalty || 0).toFixed(1)}</b> punt.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Sleep detail + HRV trend */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>

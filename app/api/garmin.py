@@ -612,12 +612,100 @@ def _valid_stress_values(values: Dict) -> list[int]:
     ]
 
 
+def _recent_training_fatigue(activities: list[GarminActivityData]) -> Dict:
+    """Estimate short-term fatigue from recent sessions until Garmin training load is available."""
+    now = datetime.utcnow()
+    session_summaries = []
+    weighted_load = 0.0
+    hardest = None
+
+    for activity in activities:
+        duration_min = (activity.duration or 0) / 60
+        if duration_min <= 0:
+            continue
+
+        hours_ago = max(0.0, (now - activity.start_time).total_seconds() / 3600) if activity.start_time else 0.0
+        avg_hr = activity.average_heart_rate or 0
+        max_hr = activity.max_heart_rate or 0
+        activity_type = (activity.activity_type or "").upper()
+
+        intensity = 1.0
+        if avg_hr >= 160:
+            intensity += 0.45
+        elif avg_hr >= 145:
+            intensity += 0.25
+        elif avg_hr >= 130:
+            intensity += 0.10
+        if max_hr >= 185:
+            intensity += 0.15
+        if "RUN" in activity_type:
+            intensity += 0.10
+
+        decay = max(0.35, 1 - (hours_ago / 72))
+        session_load = duration_min * intensity * decay
+        weighted_load += session_load
+
+        summary = {
+            "activity_id": activity.activity_id,
+            "activity_name": activity.activity_name,
+            "activity_type": activity.activity_type,
+            "start_time": activity.start_time.isoformat() if activity.start_time else None,
+            "hours_ago": round(hours_ago, 1),
+            "duration_minutes": round(duration_min),
+            "average_heart_rate": activity.average_heart_rate,
+            "max_heart_rate": activity.max_heart_rate,
+            "load": round(session_load, 1),
+        }
+        session_summaries.append(summary)
+        if hardest is None or summary["load"] > hardest["load"]:
+            hardest = summary
+
+    penalty = 0.0
+    if weighted_load >= 100:
+        penalty = 1.6
+    elif weighted_load >= 70:
+        penalty = 1.2
+    elif weighted_load >= 45:
+        penalty = 0.8
+    elif weighted_load >= 25:
+        penalty = 0.4
+
+    for session in session_summaries:
+        if (
+            session["hours_ago"] <= 36
+            and session["duration_minutes"] >= 40
+            and (
+                (session["average_heart_rate"] or 0) >= 155
+                or (session["max_heart_rate"] or 0) >= 185
+            )
+        ):
+            penalty = max(penalty, 1.1)
+
+    label = "laag"
+    if penalty >= 1.2:
+        label = "hoog"
+    elif penalty >= 0.8:
+        label = "matig-hoog"
+    elif penalty >= 0.4:
+        label = "matig"
+
+    return {
+        "load": round(weighted_load, 1),
+        "penalty": penalty,
+        "label": label,
+        "recent_activity_count": len(session_summaries),
+        "hardest_activity": hardest,
+        "sessions": session_summaries[:5],
+    }
+
+
 def _recovery_score(
     sleep_score: Optional[int],
     sleep_hours: Optional[float],
     avg_stress: Optional[int],
     body_battery: Optional[int],
     hrv: Optional[int],
+    recent_training_penalty: float = 0.0,
 ) -> int:
     score = 3.0
 
@@ -635,6 +723,8 @@ def _recovery_score(
     if hrv is not None:
         # Without a personal baseline we only apply a small stabilising signal.
         score += (hrv - 45) / 35
+
+    score -= recent_training_penalty
 
     return max(0, min(6, int(round(score))))
 
@@ -1170,6 +1260,16 @@ async def get_recovery_snapshot(
         sleep_record = _latest_health_record(db, resolved_user_id, "sleeps", since)
         stress_record = _latest_health_record(db, resolved_user_id, "stressDetails", since)
         hrv_record = _latest_health_record(db, resolved_user_id, "hrv", since)
+        recent_activities = (
+            db.query(GarminActivityData)
+            .filter(
+                GarminActivityData.user_id == resolved_user_id,
+                GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
+                GarminActivityData.start_time >= datetime.utcnow() - timedelta(hours=48),
+            )
+            .order_by(GarminActivityData.start_time.desc())
+            .all()
+        )
 
         daily = _load_health_payload(daily_record)
         sleep = _load_health_payload(sleep_record)
@@ -1210,6 +1310,7 @@ async def get_recovery_snapshot(
             if payload.get("calendarDate")
         ]
         calendar_date = date_candidates[0] if date_candidates else None
+        training_fatigue = _recent_training_fatigue(recent_activities)
 
         score = _recovery_score(
             sleep_score=sleep_score,
@@ -1217,12 +1318,21 @@ async def get_recovery_snapshot(
             avg_stress=avg_stress,
             body_battery=body_battery,
             hrv=hrv_overnight,
+            recent_training_penalty=training_fatigue["penalty"],
         )
 
         return {
             "source": "live",
             "calendar_date": calendar_date,
             "score": score,
+            "score_model": {
+                "version": "health_plus_recent_training_v1",
+                "scale": "0-6",
+                "notes": [
+                    "Health signals use sleep, stress, Body Battery and HRV.",
+                    "Recent training reduces the score for 48h based on duration and heart-rate intensity.",
+                ],
+            },
             "metrics": {
                 "sleepScore": sleep_score,
                 "sleepHours": sleep_hours,
@@ -1241,7 +1351,13 @@ async def get_recovery_snapshot(
                 "steps": daily.get("steps"),
                 "activeKilocalories": daily.get("activeKilocalories"),
                 "distanceMeters": daily.get("distanceInMeters"),
+                "recentTrainingLoad": training_fatigue["load"],
+                "recentTrainingPenalty": training_fatigue["penalty"],
+                "recentTrainingLabel": training_fatigue["label"],
+                "recentActivityCount48h": training_fatigue["recent_activity_count"],
+                "hardestRecentActivity": training_fatigue["hardest_activity"],
             },
+            "recent_training": training_fatigue,
             "records": {
                 "daily": daily_record.summary_id if daily_record else None,
                 "sleep": sleep_record.summary_id if sleep_record else None,
