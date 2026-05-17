@@ -30,12 +30,14 @@ window.FC_UTILS = {
   sportLabel: (type) => ({
     RUNNING: 'Hardlopen',
     CYCLING: 'Fietsen',
+    INDOOR_CYCLING: 'Indoor fietsen',
     LAP_SWIMMING: 'Zwemmen',
     CARDIO_TRAINING: 'Wandelen',
   })[type] || type,
   sportIcon: (type) => ({
     RUNNING: '↗',
     CYCLING: '◯',
+    INDOOR_CYCLING: '◌',
     LAP_SWIMMING: '~',
     CARDIO_TRAINING: '∙',
   })[type] || '•',

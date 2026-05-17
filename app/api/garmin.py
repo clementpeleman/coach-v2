@@ -331,6 +331,283 @@ def summarize_activities(activities: list[GarminActivityData]) -> Dict:
     }
 
 
+def _activity_raw(activity: GarminActivityData) -> Dict:
+    """Parse the stored Garmin raw payload defensively."""
+    try:
+        return json.loads(activity.data) if isinstance(activity.data, str) else (activity.data or {})
+    except Exception:
+        return {}
+
+
+def normalize_training_sport(activity: GarminActivityData) -> str:
+    """Map Garmin activity types to the sport buckets used by the coach UI."""
+    activity_type = (activity.activity_type or "").upper()
+    name = (activity.activity_name or "").lower()
+    raw = _activity_raw(activity)
+    raw_type = str(raw.get("activityType") or "").upper()
+    device_name = str(raw.get("deviceName") or "").lower()
+    combined = " ".join([activity_type, raw_type, name, device_name])
+
+    if "SWIM" in combined:
+        return "SWIMMING"
+    if "INDOOR" in combined or "ZWIFT" in combined or "VIRTUAL" in combined:
+        if "CYCLE" in combined or "BIKE" in combined or "CYCLING" in combined:
+            return "INDOOR_CYCLING"
+    if "CYCLE" in combined or "BIKE" in combined or "CYCLING" in combined:
+        return "CYCLING"
+    if "WALK" in combined or "WANDEL" in combined:
+        return "WALKING"
+    if "RUN" in combined:
+        return "RUNNING"
+    if activity_type == "CARDIO_TRAINING":
+        return "WALKING"
+    return activity_type or "UNKNOWN"
+
+
+def _activity_metric(activity: GarminActivityData, sport: str) -> Optional[float]:
+    """Return the primary sport metric: pace seconds/unit or speed km/h."""
+    distance = activity.distance or 0
+    duration = activity.duration or 0
+    if distance <= 0 or duration <= 0:
+        return None
+
+    if sport in {"CYCLING", "INDOOR_CYCLING"}:
+        return (distance / duration) * 3.6
+    if sport == "SWIMMING":
+        return duration / (distance / 100)
+    return duration / (distance / 1000)
+
+
+def _percentile(values: list[float], percentile: float) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * percentile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _median(values: list[float]) -> Optional[float]:
+    return _percentile(values, 0.5)
+
+
+def _range_around(values: list[float], fallback_values: list[float], higher_is_harder: bool) -> Optional[tuple[float, float]]:
+    source = values or fallback_values
+    if not source:
+        return None
+    if len(source) >= 4:
+        low = _percentile(source, 0.25)
+        high = _percentile(source, 0.75)
+    else:
+        center = _median(source)
+        spread = max(center * 0.06, 2.0) if center else 0
+        low = center - spread
+        high = center + spread
+    if low is None or high is None:
+        return None
+    if higher_is_harder:
+        return (round(max(0, low), 1), round(max(0, high), 1))
+    return (round(max(1, low)), round(max(1, high)))
+
+
+def _format_pace(seconds: float, suffix: str) -> str:
+    total = max(1, int(round(seconds)))
+    minutes = total // 60
+    secs = total % 60
+    return f"{minutes}:{secs:02d}{suffix}"
+
+
+def _format_metric_range(metric_range: Optional[tuple[float, float]], sport: str) -> Optional[str]:
+    if not metric_range:
+        return None
+    low, high = metric_range
+    if sport in {"CYCLING", "INDOOR_CYCLING"}:
+        return f"{round(low)}-{round(high)} km/u"
+    suffix = "/100m" if sport == "SWIMMING" else "/km"
+    return f"{_format_pace(low, suffix)}-{_format_pace(high, suffix)}"
+
+
+def _format_hr_range(hr_range: Optional[tuple[float, float]]) -> Optional[str]:
+    if not hr_range:
+        return None
+    low, high = hr_range
+    return f"{round(low)}-{round(high)}"
+
+
+def _classify_effort(activity: GarminActivityData, sport_max_hr: Optional[int]) -> str:
+    name = (activity.activity_name or "").lower()
+    if any(word in name for word in ["easy", "herstel", "recovery", "rustig", "walk", "wandel"]):
+        return "easy"
+    if any(word in name for word in ["tempo", "threshold", "drempel"]):
+        return "threshold"
+    if any(word in name for word in ["interval", "vo2", "sprint"]):
+        return "vo2"
+
+    avg_hr = activity.average_heart_rate
+    if avg_hr and sport_max_hr:
+        ratio = avg_hr / sport_max_hr
+        if ratio < 0.70:
+            return "easy"
+        if ratio < 0.80:
+            return "endurance"
+        if ratio < 0.90:
+            return "threshold"
+        return "vo2"
+
+    return "endurance"
+
+
+def _target_range_for_effort(
+    metric_values: dict[str, list[float]],
+    all_metrics: list[float],
+    sport: str,
+    effort: str,
+) -> Optional[tuple[float, float]]:
+    higher_is_harder = sport in {"CYCLING", "INDOOR_CYCLING"}
+    source = metric_values.get(effort, [])
+    fallback_order = {
+        "easy": ["easy", "endurance"],
+        "endurance": ["endurance", "easy", "threshold"],
+        "threshold": ["threshold", "vo2", "endurance"],
+        "vo2": ["vo2", "threshold"],
+    }[effort]
+    fallback = []
+    for key in fallback_order:
+        fallback.extend(metric_values.get(key, []))
+
+    metric_range = _range_around(source, fallback or all_metrics, higher_is_harder)
+    if not metric_range:
+        return None
+
+    low, high = metric_range
+    if higher_is_harder:
+        if effort == "easy":
+            return (low * 0.92, high * 0.98)
+        if effort == "vo2":
+            return (low * 1.02, high * 1.08)
+        return (low, high)
+
+    if effort == "easy":
+        return (low * 1.04, high * 1.10)
+    if effort == "vo2":
+        return (low * 0.92, high * 0.98)
+    return (low, high)
+
+
+def build_personal_training_profile(activities: list[GarminActivityData]) -> Dict:
+    """Build phase-1 personalized training targets from activity summaries."""
+    sports: dict[str, list[GarminActivityData]] = {}
+    for activity in activities:
+        sport = normalize_training_sport(activity)
+        if sport in {"UNKNOWN", ""}:
+            continue
+        sports.setdefault(sport, []).append(activity)
+
+    profile: Dict[str, Dict] = {}
+    for sport, sport_activities in sports.items():
+        sport_max_hr = max(
+            [a.max_heart_rate for a in sport_activities if a.max_heart_rate],
+            default=None,
+        )
+        metric_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
+        hr_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
+        all_metrics = []
+
+        for activity in sport_activities:
+            effort = _classify_effort(activity, sport_max_hr)
+            metric = _activity_metric(activity, sport)
+            if metric:
+                metric_values[effort].append(metric)
+                all_metrics.append(metric)
+            if activity.average_heart_rate:
+                hr_values[effort].append(activity.average_heart_rate)
+
+        zones = {}
+        for effort in ["easy", "endurance", "threshold", "vo2"]:
+            metric_range = _target_range_for_effort(metric_values, all_metrics, sport, effort)
+            hr_range = _range_around(hr_values.get(effort, []), [a.average_heart_rate for a in sport_activities if a.average_heart_rate], True)
+            zones[effort] = {
+                "metric": _format_metric_range(metric_range, sport),
+                "hr": _format_hr_range(hr_range),
+                "sample_size": len(metric_values.get(effort, [])) or len(hr_values.get(effort, [])),
+            }
+
+        session_count = len(sport_activities)
+        confidence = "low"
+        if session_count >= 10:
+            confidence = "high"
+        elif session_count >= 4:
+            confidence = "medium"
+
+        profile[sport] = {
+            "sport": sport,
+            "sessions": session_count,
+            "confidence": confidence,
+            "metric_type": "speed" if sport in {"CYCLING", "INDOOR_CYCLING"} else "pace",
+            "metric_unit": "km/u" if sport in {"CYCLING", "INDOOR_CYCLING"} else ("/100m" if sport == "SWIMMING" else "/km"),
+            "max_heart_rate_observed": sport_max_hr,
+            "zones": zones,
+            "notes": [
+                "Gebaseerd op activity summaries; interval- en lapniveau volgt in fase 2."
+                if confidence != "high"
+                else "Gebaseerd op voldoende recente sessies; fase 2 kan dit verfijnen met laps/details."
+            ],
+        }
+
+    return profile
+
+
+def build_sport_baselines(activities: list[GarminActivityData], days: int, now: datetime) -> Dict:
+    """Compare current window with the previous four weekly windows per sport."""
+    current_start = now - timedelta(days=days)
+    baseline_start = current_start - timedelta(days=28)
+    result: Dict[str, Dict] = {}
+
+    for sport in sorted({normalize_training_sport(activity) for activity in activities}):
+        if sport in {"UNKNOWN", ""}:
+            continue
+        sport_activities = [activity for activity in activities if normalize_training_sport(activity) == sport]
+        current = [activity for activity in sport_activities if activity.start_time and activity.start_time >= current_start]
+        baseline = [
+            activity
+            for activity in sport_activities
+            if activity.start_time and baseline_start <= activity.start_time < current_start
+        ]
+        current_metrics = summarize_activities(current)
+        baseline_totals = summarize_activities(baseline)
+        baseline_weekly = {
+            "sessions": round(baseline_totals["sessions"] / 4, 2),
+            "distance_km": round(baseline_totals["distance_km"] / 4, 2),
+            "duration_hours": round(baseline_totals["duration_hours"] / 4, 2),
+            "average_heart_rate": baseline_totals["average_heart_rate"],
+        }
+        baseline_duration = baseline_weekly["duration_hours"]
+        load_ratio = round(current_metrics["duration_hours"] / baseline_duration, 2) if baseline_duration else None
+        result[sport] = {
+            "sport": sport,
+            "days": days,
+            "current": current_metrics,
+            "baseline_weekly": baseline_weekly,
+            "load_ratio": load_ratio,
+            "deltas": {
+                "sessions_percent": compute_percent_change(current_metrics["sessions"], baseline_weekly["sessions"]),
+                "distance_percent": compute_percent_change(current_metrics["distance_km"], baseline_weekly["distance_km"]),
+                "duration_percent": compute_percent_change(current_metrics["duration_hours"], baseline_weekly["duration_hours"]),
+                "avg_heart_rate_delta": (
+                    round(current_metrics["average_heart_rate"] - baseline_weekly["average_heart_rate"], 1)
+                    if current_metrics["average_heart_rate"] is not None and baseline_weekly["average_heart_rate"] is not None
+                    else None
+                ),
+            },
+        }
+
+    return result
+
+
 def parse_min_start_time_from_error(error_message: str) -> Optional[datetime]:
     """Extract Garmin minimum backfill start time from API error text."""
     match = MIN_START_TIME_PATTERN.search(error_message)
@@ -1241,6 +1518,46 @@ async def weekly_analysis(
         }
     except Exception as e:
         logger.error(f"Weekly analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/training/profile")
+async def training_profile(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    days: int = Query(120, ge=30, le=365, description="Days used to learn personal targets"),
+    current_days: int = Query(7, ge=1, le=30, description="Current load window for sport baselines"),
+    db: Session = Depends(get_db),
+):
+    """Return phase-1 personalized training targets and sport-specific load baselines."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        now = datetime.utcnow()
+        start_date = now - timedelta(days=max(days, current_days + 28))
+        activities = db.query(GarminActivityData).filter(
+            GarminActivityData.user_id == resolved_user_id,
+            GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
+            GarminActivityData.start_time >= start_date,
+        ).order_by(GarminActivityData.start_time.desc()).all()
+
+        return {
+            "period_days": days,
+            "current_days": current_days,
+            "generated_at": now.isoformat(),
+            "personal_targets": build_personal_training_profile(activities),
+            "sport_baselines": build_sport_baselines(activities, current_days, now),
+            "method": {
+                "phase": 1,
+                "source": "Garmin activity summaries",
+                "notes": [
+                    "Targets are learned per sport from recent sessions.",
+                    "Four-week load comparison is calculated inside the same sport type.",
+                    "Lap/activity-detail parsing is reserved for phase 2.",
+                ],
+            },
+        }
+    except Exception as e:
+        logger.error(f"Training profile failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

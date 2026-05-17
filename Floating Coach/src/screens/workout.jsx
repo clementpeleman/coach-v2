@@ -19,6 +19,12 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
     [],
     { online, userId },
   );
+  const trainingProfileQuery = window.useLiveData(
+    (uid) => window.FC_API.fetchTrainingProfile(uid, 120, 7),
+    { personal_targets: {}, sport_baselines: {}, method: { phase: 1 } },
+    [],
+    { online, userId },
+  );
   const latestActivity = activityQuery.data.activities?.[0];
   const deviceName = latestActivity?.raw_data?.deviceName || latestActivity?.device_name || 'Garmin Connect';
   const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
@@ -27,9 +33,11 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
   const [targetMode, setTargetMode] = useStateW('pace');
   const [intensityPct, setIntensityPct] = useStateW(100);
   const selectedSport = SPORT_OPTIONS.find((sport) => sport.key === sportType) || SPORT_OPTIONS[1];
+  const personalSportProfile = trainingProfileQuery.data.personal_targets?.[sportType];
+  const personalConfidence = personalSportProfile?.confidence || 'none';
   const primaryTargetLabel = selectedSport.targetLabel;
   const primaryTargetText = selectedSport.targetText;
-  const blocks = buildStructure(rec.type, sportType);
+  const blocks = buildStructure(rec.type, sportType, personalSportProfile);
   const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
   const adjustedBlocks = blocks.map((block) => ({
     ...block,
@@ -147,6 +155,12 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
             </div>
             <div style={{ fontSize: 14, color: 'oklch(78% 0.01 100)', marginTop: 6 }}>
               Gebruik <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> als primaire sturing. Hartslag blijft nuttig als veiligheidscheck.
+            </div>
+            <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
+              textTransform: 'uppercase', letterSpacing: '.12em', marginTop: 8 }}>
+              {personalSportProfile
+                ? `Persoonlijk profiel · ${personalSportProfile.sessions} sessies · vertrouwen ${personalConfidence}`
+                : 'Fallback targets · nog te weinig sportdata'}
             </div>
           </div>
 
@@ -280,6 +294,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
             <p style={{ fontSize: 14, lineHeight: 1.55, marginTop: 10, color: 'var(--ink-2)' }}>
               {rec.desc} Met je <b>recovery {recoveryScore}/6</b> ben je hier prima op geconditioneerd.
               Deze versie is ingesteld voor <b>{selectedSport.label.toLowerCase()}</b>, stuurt primair op <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> en staat op <b>{intensityPct}%</b>.
+              {personalSportProfile
+                ? ` Targets zijn geleerd uit je laatste ${personalSportProfile.sessions} ${selectedSport.label.toLowerCase()}-sessies.`
+                : ' Ik gebruik voorlopig ruime standaardtargets tot er meer sessies binnen zijn.'}
               Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>
             <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
@@ -405,11 +422,32 @@ function metricForSport(sportType, zone) {
   return table[sportType]?.[zone] || table.RUNNING[zone] || {};
 }
 
-function withSportTarget(block, sportType, metricZone) {
-  return { ...block, ...metricForSport(sportType, metricZone || block.metricZone || 'z1') };
+function effortForMetricZone(metricZone) {
+  if (metricZone === 'z2') return 'endurance';
+  if (metricZone === 'z4') return 'threshold';
+  if (metricZone === 'z5') return 'vo2';
+  return 'easy';
 }
 
-function buildStructure(type, sportType = 'RUNNING') {
+function withSportTarget(block, sportType, metricZone, personalProfile) {
+  const zone = metricZone || block.metricZone || 'z1';
+  const defaults = metricForSport(sportType, zone);
+  const effort = effortForMetricZone(zone);
+  const personalZone = personalProfile?.zones?.[effort];
+  const personalMetric = personalZone?.metric;
+  const personalTarget = personalProfile?.metric_type === 'speed'
+    ? { speed: personalMetric || defaults.speed }
+    : { pace: personalMetric || defaults.pace };
+  return {
+    ...block,
+    ...defaults,
+    ...personalTarget,
+    hr: personalZone?.hr || block.hr,
+    personalized: Boolean(personalMetric || personalZone?.hr),
+  };
+}
+
+function buildStructure(type, sportType = 'RUNNING', personalProfile = null) {
   const colors = {
     rest:   'oklch(48% 0.05 220)',
     z1:     'oklch(55% 0.06 220)',
@@ -419,37 +457,37 @@ function buildStructure(type, sportType = 'RUNNING') {
     z5:     'oklch(68% 0.22 25)',
   };
   if (type === 'HERSTEL') return [
-    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', color: colors.z1 }, sportType, 'z1'),
-    withSportTarget({ label: sportType === 'WALKING' ? 'Rustige wandeling' : 'Easy blok', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', color: colors.rest }, sportType, 'rest'),
-    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '110-120', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', color: colors.z1 }, sportType, 'z1', personalProfile),
+    withSportTarget({ label: sportType === 'WALKING' ? 'Rustige wandeling' : 'Easy blok', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', color: colors.rest }, sportType, 'rest', personalProfile),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '110-120', color: colors.z1 }, sportType, 'z1', personalProfile),
   ];
   if (type === 'DUUR') return [
-    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 8*60, hr: '125-135', color: colors.z1 }, sportType, 'z1'),
-    withSportTarget({ label: 'Duurblok zone 2', shortLabel: 'Z2 Duur', zone: 'Z2', sec: 45*60, hr: '138-152', color: colors.z2 }, sportType, 'z2'),
-    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 8*60, hr: '125-135', color: colors.z1 }, sportType, 'z1', personalProfile),
+    withSportTarget({ label: 'Duurblok zone 2', shortLabel: 'Z2 Duur', zone: 'Z2', sec: 45*60, hr: '138-152', color: colors.z2 }, sportType, 'z2', personalProfile),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, sportType, 'z1', personalProfile),
   ];
   if (type === 'THRESHOLD') return [
-    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1'),
-    withSportTarget({ label: 'Tempo blok 1', shortLabel: 'Tempo 1', zone: 'Z4', sec: 12*60, hr: '162-170', color: colors.z4 }, sportType, 'z4'),
-    withSportTarget({ label: 'Actieve rust', shortLabel: 'Rust', zone: 'Z1', sec: 4*60, hr: '130-140', color: colors.z1 }, sportType, 'z1'),
-    withSportTarget({ label: 'Tempo blok 2', shortLabel: 'Tempo 2', zone: 'Z4', sec: 12*60, hr: '162-170', color: colors.z4 }, sportType, 'z4'),
-    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1', personalProfile),
+    withSportTarget({ label: 'Tempo blok 1', shortLabel: 'Tempo 1', zone: 'Z4', sec: 12*60, hr: '162-170', color: colors.z4 }, sportType, 'z4', personalProfile),
+    withSportTarget({ label: 'Actieve rust', shortLabel: 'Rust', zone: 'Z1', sec: 4*60, hr: '130-140', color: colors.z1 }, sportType, 'z1', personalProfile),
+    withSportTarget({ label: 'Tempo blok 2', shortLabel: 'Tempo 2', zone: 'Z4', sec: 12*60, hr: '162-170', color: colors.z4 }, sportType, 'z4', personalProfile),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, sportType, 'z1', personalProfile),
   ];
   if (type === 'VO2MAX') return [
-    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1', personalProfile),
     ...Array(6).fill(0).flatMap(() => [
-      withSportTarget({ label: 'VO2 interval', shortLabel: 'VO2', zone: 'Z5', sec: 3*60, hr: '175-185', color: colors.z5 }, sportType, 'z5'),
-      withSportTarget({ label: 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 3*60, hr: '130-140', color: colors.z1 }, sportType, 'z1'),
+      withSportTarget({ label: 'VO2 interval', shortLabel: 'VO2', zone: 'Z5', sec: 3*60, hr: '175-185', color: colors.z5 }, sportType, 'z5', personalProfile),
+      withSportTarget({ label: 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 3*60, hr: '130-140', color: colors.z1 }, sportType, 'z1', personalProfile),
     ]),
-    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, sportType, 'z1', personalProfile),
   ];
   if (type === 'SPRINT') return [
-    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1', personalProfile),
     ...Array(10).fill(0).flatMap(() => [
-      withSportTarget({ label: 'Sprint', shortLabel: 'SP', zone: 'Z5', sec: 30, hr: '> 180', color: colors.z5 }, sportType, 'z5'),
-      withSportTarget({ label: sportType === 'WALKING' ? 'Rustig wandelen' : 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 90, hr: '110-130', color: colors.rest }, sportType, 'rest'),
+      withSportTarget({ label: 'Sprint', shortLabel: 'SP', zone: 'Z5', sec: 30, hr: '> 180', color: colors.z5 }, sportType, 'z5', personalProfile),
+      withSportTarget({ label: sportType === 'WALKING' ? 'Rustig wandelen' : 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 90, hr: '110-130', color: colors.rest }, sportType, 'rest', personalProfile),
     ]),
-    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, sportType, 'z1', personalProfile),
   ];
   return [];
 }

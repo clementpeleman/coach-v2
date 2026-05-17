@@ -28,12 +28,20 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
     [period],
     { online, userId },
   );
+  const profileQuery = window.useLiveData(
+    (uid) => window.FC_API.fetchTrainingProfile(uid, 120, 7),
+    { personal_targets: {}, sport_baselines: {} },
+    [],
+    { online, userId },
+  );
   const allActivities = q.data.activities || D.activities;
   const weeklyTrend  = q.data.weekly_trend || D.weeklyTrend;
   const apiSummary   = q.data.summary;
+  const displaySummary = sportFilter === 'ALL' ? apiSummary : null;
+  const selectedBaseline = profileQuery.data.sport_baselines?.[canonicalSportFilter(sportFilter)] || null;
 
   const filtered = useMemoA(() => {
-    return allActivities.filter(a => sportFilter === 'ALL' || a.activity_type === sportFilter);
+    return allActivities.filter(a => sportFilter === 'ALL' || canonicalActivityType(a) === sportFilter);
   }, [sportFilter, allActivities]);
 
   const totals = useMemoA(() => {
@@ -95,15 +103,16 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
 
       {/* Summary */}
       <div className="grid-4">
-        <BigStat label="Sessies" value={(apiSummary?.sessions ?? totals.sessions)} unit="" hint="Aantal opgeslagen trainingen in deze periode." />
-        <BigStat label="Afstand" value={(apiSummary?.distance_km ?? totals.distance_km).toFixed(1)} unit="km" hint="Totale afstand over alle gefilterde sessies." />
-        <BigStat label="Trainingstijd" value={(apiSummary?.duration_hours ?? totals.duration_hours).toFixed(1)} unit="u" hint="Totale actieve duur, niet inclusief rustdagen." />
-        <BigStat label="Gem. hartslag" value={(apiSummary?.average_heart_rate ?? totals.avg_hr) ?? '–'} unit="bpm" hint="Gemiddelde van de sessie-gemiddelden." />
+        <BigStat label="Sessies" value={(displaySummary?.sessions ?? totals.sessions)} unit="" hint="Aantal opgeslagen trainingen in deze periode." />
+        <BigStat label="Afstand" value={(displaySummary?.distance_km ?? totals.distance_km).toFixed(1)} unit="km" hint="Totale afstand over de zichtbare sessies." />
+        <BigStat label="Trainingstijd" value={(displaySummary?.duration_hours ?? totals.duration_hours).toFixed(1)} unit="u" hint="Totale actieve duur, niet inclusief rustdagen." />
+        <BigStat label="Gem. hartslag" value={(displaySummary?.average_heart_rate ?? totals.avg_hr) ?? '–'} unit="bpm" hint="Gemiddelde van de sessie-gemiddelden." />
       </div>
 
       {/* Trend insight + breakdown */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20 }}>
-        <TrendCard weeklyTrend={weeklyTrend} activities={allActivities} period={period} />
+        <TrendCard weeklyTrend={weeklyTrend} activities={allActivities} period={period}
+          sportFilter={sportFilter} sportBaseline={selectedBaseline} />
         <SportBreakdown allActivities={allActivities} sportFilter={sportFilter} setSportFilter={setSportFilter} />
       </div>
 
@@ -237,18 +246,52 @@ function BigStat({ label, value, unit, hint }) {
   );
 }
 
-function TrendCard({ weeklyTrend, activities, period }) {
+function canonicalSportFilter(filter) {
+  if (filter === 'INDOOR_CYCLING') return 'INDOOR_CYCLING';
+  if (filter === 'LAP_SWIMMING') return 'SWIMMING';
+  if (filter === 'CARDIO_TRAINING') return 'WALKING';
+  return filter;
+}
+
+function canonicalActivityType(activity) {
+  const type = String(activity.activity_type || '').toUpperCase();
+  const name = String(activity.activity_name || '').toLowerCase();
+  const rawType = String(activity.raw_data?.activityType || '').toUpperCase();
+  const combined = `${type} ${rawType} ${name}`;
+  if (combined.includes('SWIM')) return 'LAP_SWIMMING';
+  if ((combined.includes('INDOOR') || combined.includes('ZWIFT') || combined.includes('VIRTUAL')) &&
+      (combined.includes('CYCLE') || combined.includes('BIKE') || combined.includes('CYCLING'))) return 'INDOOR_CYCLING';
+  if (combined.includes('CYCLE') || combined.includes('BIKE') || combined.includes('CYCLING')) return 'CYCLING';
+  if (combined.includes('WALK') || combined.includes('WANDEL') || type === 'CARDIO_TRAINING') return 'CARDIO_TRAINING';
+  if (combined.includes('RUN')) return 'RUNNING';
+  return type || 'UNKNOWN';
+}
+
+function sportScopeLabel(filter) {
+  const canonical = canonicalSportFilter(filter);
+  return ({
+    ALL: 'alle sporten samen',
+    RUNNING: 'hardlopen',
+    WALKING: 'wandelen',
+    CYCLING: 'fietsen',
+    INDOOR_CYCLING: 'indoor fietsen',
+    SWIMMING: 'zwemmen',
+  })[canonical] || String(filter || '').toLowerCase();
+}
+
+function TrendCard({ weeklyTrend, activities, period, sportFilter, sportBaseline }) {
   // Compute deltas client-side from the trend if available
   const trend = (weeklyTrend && weeklyTrend.length) ? weeklyTrend : window.FC_DATA.weeklyTrend;
   const split = Math.ceil(trend.length / 2);
   const a = trend.slice(0, split), b = trend.slice(split);
   const avg = (vs) => vs.length ? vs.reduce((s,v)=>s+v,0)/vs.length : 0;
   const dur = (vs, key) => vs.map((w) => w[key] ?? (key==='duration_hours' ? (w.duration_seconds||0)/3600 : 0));
-  const dDur = a.length && b.length ? ((avg(dur(b,'duration_hours')) - avg(dur(a,'duration_hours'))) / (avg(dur(a,'duration_hours')) || 1)) * 100 : -34;
-  const dDis = a.length && b.length ? ((avg(dur(b,'distance_km')) - avg(dur(a,'distance_km'))) / (avg(dur(a,'distance_km')) || 1)) * 100 : -29;
+  const baselineDeltas = sportBaseline?.deltas;
+  const dDur = baselineDeltas?.duration_percent ?? (a.length && b.length ? ((avg(dur(b,'duration_hours')) - avg(dur(a,'duration_hours'))) / (avg(dur(a,'duration_hours')) || 1)) * 100 : -34);
+  const dDis = baselineDeltas?.distance_percent ?? (a.length && b.length ? ((avg(dur(b,'distance_km')) - avg(dur(a,'distance_km'))) / (avg(dur(a,'distance_km')) || 1)) * 100 : -29);
   const aHr = avg(a.map(w => w.average_heart_rate || 0).filter(Boolean));
   const bHr = avg(b.map(w => w.average_heart_rate || 0).filter(Boolean));
-  const dHr = aHr && bHr ? bHr - aHr : -1;
+  const dHr = baselineDeltas?.avg_heart_rate_delta ?? (aHr && bHr ? bHr - aHr : -1);
   const fmt = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(0)}%`;
 
   const list = (activities && activities.length) ? activities : [];
@@ -261,7 +304,7 @@ function TrendCard({ weeklyTrend, activities, period }) {
   const acuteHours = hoursFor(list.filter((item) => daysAgo(item.start_time) <= 7));
   const chronicBase = list.filter((item) => daysAgo(item.start_time) > 7 && daysAgo(item.start_time) <= 30);
   const chronicWeeklyHours = chronicBase.length ? hoursFor(chronicBase) / (23 / 7) : null;
-  const loadRatio = chronicWeeklyHours ? acuteHours / chronicWeeklyHours : null;
+  const loadRatio = sportBaseline?.load_ratio ?? (chronicWeeklyHours ? acuteHours / chronicWeeklyHours : null);
   const loadPct = Math.max(0, Math.min(100, ((loadRatio || 0) / 1.6) * 100));
   const loadLabel = !loadRatio
     ? 'nog niet genoeg data'
@@ -271,12 +314,18 @@ function TrendCard({ weeklyTrend, activities, period }) {
         ? 'stabiele opbouw'
         : 'hoge sprong';
   const headline = period === 7
-    ? 'Korte termijn: focus op recente sessies'
+    ? `Recente belasting voor ${sportScopeLabel(sportFilter)}`
     : loadRatio && loadRatio > 1.3
       ? 'Belasting stijgt snel'
       : loadRatio && loadRatio < 0.8
         ? 'Belasting ligt lager dan je basis'
         : 'Belasting blijft in balans';
+  const scopeText = sportFilter === 'ALL'
+    ? 'alle sporten samen'
+    : `alleen je ${sportScopeLabel(sportFilter)}sessies`;
+  const baselineText = sportBaseline
+    ? `Deze vergelijking gebruikt ${scopeText}: laatste 7 dagen tegenover je gemiddelde week uit de vorige 4 weken.`
+    : 'Verhouding tussen je trainingstijd van de laatste 7 dagen en je normale weekvolume uit de weken ervoor.';
 
   return (
     <div className="card dark" style={{ position: 'relative', overflow: 'hidden' }}>
@@ -293,8 +342,8 @@ function TrendCard({ weeklyTrend, activities, period }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-        <DeltaStat label="Trainingstijd/week" delta={fmt(dDur)} sub="tweede helft vs eerste helft" trend={dDur < 0 ? 'down' : 'up'} />
-        <DeltaStat label="Afstand/week" delta={fmt(dDis)} sub="tweede helft vs eerste helft" trend={dDis < 0 ? 'down' : 'up'} />
+        <DeltaStat label="Trainingstijd/week" delta={fmt(dDur)} sub={sportBaseline ? 'vs 4-weeks sportbasis' : 'tweede helft vs eerste helft'} trend={dDur < 0 ? 'down' : 'up'} />
+        <DeltaStat label="Afstand/week" delta={fmt(dDis)} sub={sportBaseline ? 'vs 4-weeks sportbasis' : 'tweede helft vs eerste helft'} trend={dDis < 0 ? 'down' : 'up'} />
         <DeltaStat label="Hartslag" delta={`${dHr >= 0 ? '+' : ''}${dHr.toFixed(0)} bpm`} sub="gem. sessie-HR verschil" trend={Math.abs(dHr) < 2 ? 'flat' : (dHr < 0 ? 'down' : 'up')} />
       </div>
 
@@ -302,7 +351,7 @@ function TrendCard({ weeklyTrend, activities, period }) {
 
       <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
         textTransform: 'uppercase', letterSpacing: '.14em', marginBottom: 10 }}>
-        Belastingbalans
+        Belasting vs 4-weeks gemiddelde
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <div className="mono" style={{ fontSize: 36, fontWeight: 500,
@@ -314,7 +363,7 @@ function TrendCard({ weeklyTrend, activities, period }) {
         </div>
       </div>
       <p style={{ color: 'oklch(76% 0.01 100)', fontSize: 12, lineHeight: 1.45, margin: '8px 0 0' }}>
-        Verhouding tussen je trainingstijd van de laatste 7 dagen en je normale weekvolume uit de weken ervoor.
+        {baselineText}
       </p>
       {/* Load gauge */}
       <div style={{ marginTop: 12, height: 8, borderRadius: 4, background: 'oklch(25% 0.005 100)',
@@ -368,7 +417,8 @@ function DeltaStat({ label, delta, sub, trend }) {
 function SportBreakdown({ allActivities, sportFilter, setSportFilter }) {
   const list = (allActivities && allActivities.length) ? allActivities : window.FC_DATA.activities;
   const counts = list.reduce((acc, a) => {
-    acc[a.activity_type] = (acc[a.activity_type] || 0) + 1;
+    const key = canonicalActivityType(a);
+    acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
   const total = list.length;
@@ -376,6 +426,7 @@ function SportBreakdown({ allActivities, sportFilter, setSportFilter }) {
     { key: 'ALL', label: 'Alle', n: total },
     { key: 'RUNNING', label: 'Hardlopen', n: counts.RUNNING || 0 },
     { key: 'CYCLING', label: 'Fietsen', n: counts.CYCLING || 0 },
+    { key: 'INDOOR_CYCLING', label: 'Zwift', n: counts.INDOOR_CYCLING || 0 },
     { key: 'LAP_SWIMMING', label: 'Zwemmen', n: counts.LAP_SWIMMING || 0 },
     { key: 'CARDIO_TRAINING', label: 'Wandelen', n: counts.CARDIO_TRAINING || 0 },
   ];

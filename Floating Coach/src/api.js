@@ -100,6 +100,9 @@
   function fetchWeeklyAnalysis(userId) {
     return getJson(`/garmin/analysis/weekly?user_id=${userId}`);
   }
+  function fetchTrainingProfile(userId, days = 120, currentDays = 7) {
+    return getJson(`/garmin/training/profile?user_id=${userId}&days=${days}&current_days=${currentDays}`);
+  }
 
   // ---- Web user ----
   function loginWebUser(email, displayName) {
@@ -123,7 +126,7 @@
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
     fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
-    fetchWeather,
+    fetchTrainingProfile, fetchWeather,
     loginWebUser, fetchWebUser,
     sendChatMessage,
   };
