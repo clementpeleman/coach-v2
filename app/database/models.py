@@ -117,6 +117,23 @@ class GarminActivityAuxiliaryData(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class GarminWebhookEvent(Base):
+    """Audit log for incoming Garmin webhook deliveries and processing status."""
+    __tablename__ = 'garmin_webhook_events'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('user_profile.user_id'), nullable=True)
+    garmin_user_id = Column(String, nullable=True)
+    source = Column(String, nullable=False)  # activity, health, deregistration, permissions
+    summary_types = Column(Text, nullable=True)  # JSON array of top-level payload keys
+    item_count = Column(Integer, default=0)
+    callback_count = Column(Integer, default=0)
+    status = Column(String, default='received')  # received, processed, partial, failed
+    error = Column(Text, nullable=True)
+    payload = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 class OAuthSession(Base):
     """Stores temporary OAuth2 state and code verifier."""
     __tablename__ = 'oauth_sessions'

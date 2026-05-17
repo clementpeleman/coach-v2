@@ -1,6 +1,6 @@
 """Garmin OAuth2 and webhook API endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from typing import Dict, Optional
 import logging
@@ -19,6 +19,7 @@ from app.database.models import (
     GarminActivityData,
     GarminHealthData,
     GarminToken,
+    GarminWebhookEvent,
     OAuthSession,
 )
 
@@ -53,6 +54,45 @@ def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> 
     if resolved_user_id is None:
         raise HTTPException(status_code=422, detail="user_id is required")
     return resolved_user_id
+
+
+def _create_webhook_event(db: Session, source: str, payload: Dict) -> GarminWebhookEvent:
+    """Persist the raw Garmin webhook payload before processing it."""
+    summary_types = list(payload.keys())
+    items = [
+        item
+        for value in payload.values()
+        if isinstance(value, list)
+        for item in value
+        if isinstance(item, dict)
+    ]
+    garmin_user_id = next((item.get("userId") for item in items if item.get("userId")), None)
+    token = None
+    if garmin_user_id:
+        token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
+
+    event = GarminWebhookEvent(
+        user_id=token.user_id if token else None,
+        garmin_user_id=garmin_user_id,
+        source=source,
+        summary_types=json.dumps(summary_types),
+        item_count=len(items),
+        callback_count=sum(1 for item in items if item.get("callbackURL")),
+        status="received",
+        payload=json.dumps(payload),
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def _finish_webhook_event(db: Session, event: GarminWebhookEvent, errors: list[str]) -> None:
+    """Mark a Garmin webhook audit event as processed, partial, or failed."""
+    event.status = "processed" if not errors else "partial"
+    event.error = "\n".join(errors) if errors else None
+    event.updated_at = datetime.utcnow()
+    db.commit()
 
 
 def summarize_activities(activities: list[GarminActivityData]) -> Dict:
@@ -813,12 +853,67 @@ async def garmin_import_status(
             .group_by(GarminHealthData.summary_type)
             .all()
         )
+        webhook_counts = dict(
+            db.query(GarminWebhookEvent.source, func.count(GarminWebhookEvent.id))
+            .filter(
+                GarminWebhookEvent.user_id == resolved_user_id,
+                GarminWebhookEvent.created_at >= start_date,
+            )
+            .group_by(GarminWebhookEvent.source)
+            .all()
+        )
+        webhook_status_counts = {
+            f"{source}:{status}": count
+            for source, status, count in (
+                db.query(
+                    GarminWebhookEvent.source,
+                    GarminWebhookEvent.status,
+                    func.count(GarminWebhookEvent.id),
+                )
+                .filter(
+                    GarminWebhookEvent.user_id == resolved_user_id,
+                    GarminWebhookEvent.created_at >= start_date,
+                )
+                .group_by(GarminWebhookEvent.source, GarminWebhookEvent.status)
+                .all()
+            )
+        }
+        recent_webhooks = [
+            {
+                "id": event.id,
+                "source": event.source,
+                "summary_types": json.loads(event.summary_types or "[]"),
+                "item_count": event.item_count,
+                "callback_count": event.callback_count,
+                "status": event.status,
+                "error": event.error,
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+            }
+            for event in (
+                db.query(GarminWebhookEvent)
+                .filter(
+                    or_(
+                        GarminWebhookEvent.user_id == resolved_user_id,
+                        GarminWebhookEvent.user_id.is_(None),
+                    ),
+                    GarminWebhookEvent.created_at >= start_date,
+                )
+                .order_by(GarminWebhookEvent.created_at.desc())
+                .limit(20)
+                .all()
+            )
+        ]
 
         return {
             "period_days": period_days,
             "activity": activity_counts,
             "activity_auxiliary": auxiliary_counts,
             "health": health_counts,
+            "webhooks": {
+                "counts": webhook_counts,
+                "status_counts": webhook_status_counts,
+                "recent": recent_webhooks,
+            },
         }
     except Exception as e:
         logger.error(f"Import status failed: {e}")
@@ -1162,6 +1257,8 @@ async def receive_health_webhook(
     try:
         data = await request.json()
         logger.info(f"Received health webhook: {data}")
+        event = _create_webhook_event(db, "health", data)
+        errors = []
 
         # Process each summary type
         for summary_type, items in data.items():
@@ -1175,7 +1272,9 @@ async def receive_health_webhook(
                 # Resolve internal user_id from garmin_user_id
                 token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
                 if not token:
-                    logger.warning(f"No token found for Garmin user {garmin_user_id}")
+                    message = f"No token found for Garmin user {garmin_user_id}"
+                    errors.append(message)
+                    logger.warning(message)
                     continue
 
                 user_id = token.user_id
@@ -1189,7 +1288,9 @@ async def receive_health_webhook(
                         client._store_health_data(summary_type, [item])
                         logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
-                        logger.error(f"Failed to store PUSH data: {e}")
+                        message = f"Failed to store PUSH {summary_type}: {e}"
+                        errors.append(message)
+                        logger.error(message)
                     continue
 
                 # This is a PING notification, we need to fetch data from callback URL
@@ -1211,10 +1312,15 @@ async def receive_health_webhook(
                         client._store_health_data(summary_type, summaries)
                         logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
-                        logger.error(f"Callback URL returned {response.status_code}: {response.text}")
+                        message = f"{summary_type} callback returned {response.status_code}: {response.text}"
+                        errors.append(message)
+                        logger.error(message)
                 except Exception as e:
-                    logger.error(f"Failed to fetch/store from callback URL: {e}")
+                    message = f"Failed to fetch/store {summary_type} from callback URL: {e}"
+                    errors.append(message)
+                    logger.error(message)
 
+        _finish_webhook_event(db, event, errors)
         return {"status": "received"}
 
     except Exception as e:
@@ -1236,6 +1342,8 @@ async def receive_activity_webhook(
     try:
         data = await request.json()
         logger.info(f"Received activity webhook: {data}")
+        event = _create_webhook_event(db, "activity", data)
+        errors = []
 
         # Process each summary type
         for summary_type, items in data.items():
@@ -1246,7 +1354,9 @@ async def receive_activity_webhook(
                 # Resolve internal user_id from garmin_user_id
                 token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
                 if not token:
-                    logger.warning(f"No token found for Garmin user {garmin_user_id}")
+                    message = f"No token found for Garmin user {garmin_user_id}"
+                    errors.append(message)
+                    logger.warning(message)
                     continue
 
                 user_id = token.user_id
@@ -1260,7 +1370,9 @@ async def receive_activity_webhook(
                         client._store_activity_data([item], summary_type)
                         logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
-                        logger.error(f"Failed to store PUSH activity: {e}")
+                        message = f"Failed to store PUSH {summary_type}: {e}"
+                        errors.append(message)
+                        logger.error(message)
                     continue
 
                 # This is a PING notification, we need to fetch data from callback URL
@@ -1284,7 +1396,9 @@ async def receive_activity_webhook(
                             )
                             logger.info(f"Stored activity file {item.get('summaryId')} for user {user_id}")
                         else:
-                            logger.error(f"Activity file callback returned {file_response.status_code}: {file_response.text}")
+                            message = f"Activity file callback returned {file_response.status_code}: {file_response.text}"
+                            errors.append(message)
+                            logger.error(message)
                         continue
 
                     response = requests.get(
@@ -1300,10 +1414,15 @@ async def receive_activity_webhook(
                         client._store_activity_data(summaries, summary_type)
                         logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
-                        logger.error(f"Callback URL returned {response.status_code}: {response.text}")
+                        message = f"{summary_type} callback returned {response.status_code}: {response.text}"
+                        errors.append(message)
+                        logger.error(message)
                 except Exception as e:
-                    logger.error(f"Failed to fetch/store from callback URL: {e}")
+                    message = f"Failed to fetch/store {summary_type} from callback URL: {e}"
+                    errors.append(message)
+                    logger.error(message)
 
+        _finish_webhook_event(db, event, errors)
         return {"status": "received"}
 
     except Exception as e:
@@ -1324,6 +1443,8 @@ async def receive_deregistration_webhook(
     try:
         data = await request.json()
         logger.info(f"Received deregistration webhook: {data}")
+        event = _create_webhook_event(db, "deregistration", data)
+        errors = []
 
         # Extract user ID from webhook
         deregistrations = data.get('deregistrations', [])
@@ -1339,8 +1460,11 @@ async def receive_deregistration_webhook(
                 if garmin_token:
                     db.delete(garmin_token)
                     logger.info(f"Deleted tokens for Garmin user {garmin_user_id}")
+                else:
+                    errors.append(f"No token found for Garmin user {garmin_user_id}")
 
         db.commit()
+        _finish_webhook_event(db, event, errors)
         return {"status": "received"}
 
     except Exception as e:
@@ -1361,10 +1485,12 @@ async def receive_permissions_webhook(
     try:
         data = await request.json()
         logger.info(f"Received permissions webhook: {data}")
+        event = _create_webhook_event(db, "permissions", data)
 
         # TODO: Update user permissions in database
         # For now, just log it
 
+        _finish_webhook_event(db, event, [])
         return {"status": "received"}
 
     except Exception as e:
