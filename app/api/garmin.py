@@ -29,6 +29,7 @@ MIN_START_TIME_PATTERN = re.compile(r"before min start time of ([0-9T:\.\-]+Z)")
 ACTIVITY_BACKFILL_WINDOW_DAYS = 30
 HEALTH_BACKFILL_WINDOW_DAYS = 90
 DEFAULT_ACTIVITY_BACKFILL_TYPES = ["activities", "activityDetails", "moveIQActivities"]
+CORE_ACTIVITY_BACKFILL_TYPES = ["activities", "activityDetails"]
 DEFAULT_HEALTH_BACKFILL_TYPES = [
     "dailies",
     "epochs",
@@ -43,6 +44,7 @@ DEFAULT_HEALTH_BACKFILL_TYPES = [
     "bloodPressures",
     "skinTemp",
 ]
+CORE_HEALTH_BACKFILL_TYPES = ["dailies", "sleeps", "stressDetails", "hrv"]
 
 
 def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> int:
@@ -109,6 +111,28 @@ def parse_min_start_time_from_error(error_message: str) -> Optional[datetime]:
 def is_duplicate_backfill_error(error_message: str) -> bool:
     """Return true when Garmin rejects a request because that window was already requested."""
     return "duplicate" in error_message.lower() and "backfill" in error_message.lower()
+
+
+def is_rate_limit_error(error_message: str) -> bool:
+    """Return true when Garmin rejects a request due to backfill rate limits."""
+    lowered = error_message.lower()
+    return "rate limit" in lowered or "too many request" in lowered or "quota" in lowered
+
+
+def backfill_error_status(error_message: str) -> str:
+    if is_duplicate_backfill_error(error_message):
+        return "duplicate"
+    if is_rate_limit_error(error_message):
+        return "rate_limited"
+    return "error"
+
+
+def backfill_error_note(error_message: str) -> str:
+    if is_duplicate_backfill_error(error_message):
+        return "Garmin reported this range was already processed."
+    if is_rate_limit_error(error_message):
+        return "Garmin rate limit hit. Wait at least 1 minute before requesting more backfill."
+    return error_message
 
 
 def split_backfill_windows(start: datetime, end: datetime, window_days: int) -> list[tuple[datetime, datetime]]:
@@ -214,12 +238,8 @@ def request_activity_backfill_range(
                     "requested_start": window_start.isoformat(),
                     "effective_start": window_start.isoformat(),
                     "end": window_end.isoformat(),
-                    "status": "duplicate" if is_duplicate_backfill_error(error_text) else "error",
-                    "notes": [
-                        "Garmin reported this range was already processed."
-                        if is_duplicate_backfill_error(error_text)
-                        else error_text
-                    ],
+                    "status": backfill_error_status(error_text),
+                    "notes": [backfill_error_note(error_text)],
                 }
             )
     return results
@@ -248,12 +268,8 @@ def request_health_backfill_range(
                 client.backfill_health_type(data_type, window_start, window_end)
         except Exception as exc:
             error_text = str(exc)
-            if is_duplicate_backfill_error(error_text):
-                result["status"] = "duplicate"
-                result["notes"].append("Garmin reported this range was already processed.")
-            else:
-                result["status"] = "error"
-                result["notes"].append(error_text)
+            result["status"] = backfill_error_status(error_text)
+            result["notes"].append(backfill_error_note(error_text))
         results.append(result)
     return results
 
@@ -1024,7 +1040,7 @@ async def request_backfill(
     telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
-    data_type: str = Query(..., description="Type of data to backfill, e.g. activities, activityDetails, health, all"),
+    data_type: str = Query(..., description="Type of data to backfill, e.g. core, activities, health, full"),
     db: Session = Depends(get_db)
 ):
     """
@@ -1053,14 +1069,18 @@ async def request_backfill(
 
         health_backfill: Dict[str, list[Dict]] = {}
         health_types = []
-        if normalized_type in ["health", "both", "all"]:
+        if normalized_type in ["core", "both", "all"]:
+            health_types = CORE_HEALTH_BACKFILL_TYPES.copy()
+        elif normalized_type in ["health", "full-health", "full"]:
             health_types = DEFAULT_HEALTH_BACKFILL_TYPES.copy()
         elif normalized_type in DEFAULT_HEALTH_BACKFILL_TYPES:
             health_types = [normalized_type]
 
         activity_backfill: Dict[str, list[Dict]] = {}
         activity_types = []
-        if normalized_type in ["activity", "both", "all"]:
+        if normalized_type in ["core", "both", "all"]:
+            activity_types = CORE_ACTIVITY_BACKFILL_TYPES.copy()
+        elif normalized_type in ["activity", "full-activity", "full"]:
             activity_types = DEFAULT_ACTIVITY_BACKFILL_TYPES.copy()
         elif normalized_type in DEFAULT_ACTIVITY_BACKFILL_TYPES:
             activity_types = [normalized_type]
@@ -1077,13 +1097,14 @@ async def request_backfill(
                 status_code=422,
                 detail=(
                     "Unsupported data_type. Use all, both, health, activity, activities, "
-                    "activityDetails, moveIQActivities, or a Health API type such as hrv."
+                    "activityDetails, moveIQActivities, full, or a Health API type such as hrv."
                 ),
             )
 
         return {
             "status": "success",
             "message": f"Backfill requested for {data_type} from {start_date} to {end_date}. Data will be sent via webhooks.",
+            "rate_limit_note": "Garmin evaluation keys allow about 100 days of backfill per minute. Use core/all first; wait before full imports.",
             "activity_backfill": activity_backfill,
             "health_backfill": health_backfill,
         }
@@ -1109,7 +1130,7 @@ async def request_smart_activity_backfill(
         start = end - timedelta(days=days)
         activity_backfill = {
             activity_type: request_activity_backfill_range(client, start, end, activity_type)
-            for activity_type in DEFAULT_ACTIVITY_BACKFILL_TYPES
+            for activity_type in CORE_ACTIVITY_BACKFILL_TYPES
         }
 
         return {
