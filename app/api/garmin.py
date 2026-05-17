@@ -46,6 +46,9 @@ DEFAULT_HEALTH_BACKFILL_TYPES = [
     "skinTemp",
 ]
 CORE_HEALTH_BACKFILL_TYPES = ["dailies", "sleeps", "stressDetails", "hrv"]
+REQUIRED_EXPORT_PERMISSIONS = {"ACTIVITY_EXPORT", "HISTORICAL_DATA_EXPORT"}
+INITIAL_ACTIVITY_BACKFILL_DAYS = 30
+INITIAL_HEALTH_BACKFILL_DAYS = 7
 
 
 def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> int:
@@ -54,6 +57,62 @@ def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> 
     if resolved_user_id is None:
         raise HTTPException(status_code=422, detail="user_id is required")
     return resolved_user_id
+
+
+def extract_permission_names(permissions_response) -> set[str]:
+    """Normalize Garmin's permissions response to a set of permission names."""
+    if isinstance(permissions_response, dict):
+        permissions = permissions_response.get("permissions", [])
+    else:
+        permissions = permissions_response or []
+    return {str(permission) for permission in permissions}
+
+
+def request_initial_backfill(
+    client: GarminAPIClient,
+    permissions_response,
+) -> Dict[str, Dict[str, list[Dict]]]:
+    """Request a conservative first import after OAuth without exhausting eval quotas."""
+    permissions = extract_permission_names(permissions_response)
+    result: Dict[str, Dict[str, list[Dict]]] = {
+        "activity": {},
+        "health": {},
+        "skipped": {},
+    }
+
+    now = datetime.utcnow()
+
+    if REQUIRED_EXPORT_PERMISSIONS.issubset(permissions):
+        activity_start = now - timedelta(days=INITIAL_ACTIVITY_BACKFILL_DAYS)
+        for activity_type in CORE_ACTIVITY_BACKFILL_TYPES:
+            result["activity"][activity_type] = request_activity_backfill_range(
+                client, activity_start, now, activity_type
+            )
+    else:
+        result["skipped"]["activity"] = [
+            {
+                "status": "skipped",
+                "notes": [
+                    "Missing ACTIVITY_EXPORT or HISTORICAL_DATA_EXPORT permission after OAuth."
+                ],
+            }
+        ]
+
+    if "HEALTH_EXPORT" in permissions:
+        health_start = now - timedelta(days=INITIAL_HEALTH_BACKFILL_DAYS)
+        for health_type in CORE_HEALTH_BACKFILL_TYPES:
+            result["health"][health_type] = request_health_backfill_range(
+                client, health_type, health_start, now
+            )
+    else:
+        result["skipped"]["health"] = [
+            {
+                "status": "skipped",
+                "notes": ["Missing HEALTH_EXPORT permission after OAuth."],
+            }
+        ]
+
+    return result
 
 
 def _create_webhook_event(db: Session, source: str, payload: Dict) -> GarminWebhookEvent:
@@ -593,20 +652,11 @@ async def oauth_callback(
         access_token = token_data['access_token']
         permissions = oauth_service.get_user_permissions(access_token)
 
-        # Kick off an initial historical backfill attempt after connect.
+        # Kick off a conservative initial import after connect. Evaluation keys are
+        # limited by days requested, so keep this small and prioritize activities.
         try:
             client = GarminAPIClient(db, user_id)
-            backfill_end = datetime.utcnow()
-            backfill_start = backfill_end - timedelta(days=120)
-            backfill_result = {}
-            for activity_type in DEFAULT_ACTIVITY_BACKFILL_TYPES:
-                backfill_result[activity_type] = request_activity_backfill_range(
-                    client, backfill_start, backfill_end, activity_type
-                )
-            for health_type in DEFAULT_HEALTH_BACKFILL_TYPES:
-                backfill_result[health_type] = request_health_backfill_range(
-                    client, health_type, backfill_start, backfill_end
-                )
+            backfill_result = request_initial_backfill(client, permissions)
             logger.info(f"Initial Garmin backfill requested after OAuth: {backfill_result}")
         except Exception as backfill_exc:
             logger.warning(f"Initial Garmin backfill after OAuth failed: {backfill_exc}")
