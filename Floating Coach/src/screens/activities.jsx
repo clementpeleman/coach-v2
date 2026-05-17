@@ -65,14 +65,14 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
       <div className="screen-head">
         <div>
           <div className="label" style={{ marginBottom: 10 }}>Sessies & trends</div>
-          <h1>Activiteiten.<br/><em>Laatste {period === 30 ? '30 dagen' : '90 dagen'}.</em></h1>
+          <h1>Activiteiten.<br/><em>Laatste {period} dagen.</em></h1>
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          {[30, 90].map(d => (
+          {[7, 30].map(d => (
             <button key={d} onClick={() => setPeriod(d)}
               className={period === d ? 'btn' : 'btn ghost'}
               style={{ padding: '10px 16px', fontSize: 12 }}>
-              {d === 30 ? '1 maand' : '3 maanden'}
+              {d}d
             </button>
           ))}
         </div>
@@ -95,15 +95,15 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
 
       {/* Summary */}
       <div className="grid-4">
-        <BigStat label="Sessies" value={(apiSummary?.sessions ?? totals.sessions)} unit="" />
-        <BigStat label="Afstand" value={(apiSummary?.distance_km ?? totals.distance_km).toFixed(1)} unit="km" />
-        <BigStat label="Duur" value={(apiSummary?.duration_hours ?? totals.duration_hours).toFixed(1)} unit="u" />
-        <BigStat label="Avg HR" value={(apiSummary?.average_heart_rate ?? totals.avg_hr) ?? '–'} unit="bpm" />
+        <BigStat label="Sessies" value={(apiSummary?.sessions ?? totals.sessions)} unit="" hint="Aantal opgeslagen trainingen in deze periode." />
+        <BigStat label="Afstand" value={(apiSummary?.distance_km ?? totals.distance_km).toFixed(1)} unit="km" hint="Totale afstand over alle gefilterde sessies." />
+        <BigStat label="Trainingstijd" value={(apiSummary?.duration_hours ?? totals.duration_hours).toFixed(1)} unit="u" hint="Totale actieve duur, niet inclusief rustdagen." />
+        <BigStat label="Gem. hartslag" value={(apiSummary?.average_heart_rate ?? totals.avg_hr) ?? '–'} unit="bpm" hint="Gemiddelde van de sessie-gemiddelden." />
       </div>
 
       {/* Trend insight + breakdown */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20 }}>
-        <TrendCard weeklyTrend={weeklyTrend} />
+        <TrendCard weeklyTrend={weeklyTrend} activities={allActivities} period={period} />
         <SportBreakdown allActivities={allActivities} sportFilter={sportFilter} setSportFilter={setSportFilter} />
       </div>
 
@@ -157,7 +157,7 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
           <h2>Activiteit details</h2>
           <span className="mono" style={{ fontSize: 11, color: 'var(--ink-4)',
             textTransform: 'uppercase', letterSpacing: '.14em' }}>
-            {filtered.length} sessies
+            {filtered.length} van {allActivities.length} sessies
           </span>
         </div>
         <table className="fc">
@@ -174,6 +174,13 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
             </tr>
           </thead>
           <tbody>
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan="8" style={{ padding: '28px 24px', color: 'var(--ink-3)' }}>
+                  Geen sessies voor deze filter en periode.
+                </td>
+              </tr>
+            )}
             {filtered.map((a) => (
               <tr key={a.id} className="hover" onClick={() => onNavigate('workout')}>
                 <td style={{ paddingLeft: 24 }}>
@@ -213,7 +220,7 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
   );
 }
 
-function BigStat({ label, value, unit }) {
+function BigStat({ label, value, unit, hint }) {
   return (
     <div className="card">
       <span className="label">{label}</span>
@@ -221,11 +228,16 @@ function BigStat({ label, value, unit }) {
         <span className="stat-big mono">{value}</span>
         {unit && <span className="stat-unit">{unit}</span>}
       </div>
+      {hint && (
+        <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.4, color: 'var(--ink-4)' }}>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }
 
-function TrendCard({ weeklyTrend }) {
+function TrendCard({ weeklyTrend, activities, period }) {
   // Compute deltas client-side from the trend if available
   const trend = (weeklyTrend && weeklyTrend.length) ? weeklyTrend : window.FC_DATA.weeklyTrend;
   const split = Math.ceil(trend.length / 2);
@@ -238,6 +250,34 @@ function TrendCard({ weeklyTrend }) {
   const bHr = avg(b.map(w => w.average_heart_rate || 0).filter(Boolean));
   const dHr = aHr && bHr ? bHr - aHr : -1;
   const fmt = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(0)}%`;
+
+  const list = (activities && activities.length) ? activities : [];
+  const now = new Date();
+  const daysAgo = (dateString) => {
+    const t = new Date(dateString).getTime();
+    return Number.isFinite(t) ? (now.getTime() - t) / 86400000 : Infinity;
+  };
+  const hoursFor = (items) => items.reduce((sum, item) => sum + ((item.duration_seconds || 0) / 3600), 0);
+  const acuteHours = hoursFor(list.filter((item) => daysAgo(item.start_time) <= 7));
+  const chronicBase = list.filter((item) => daysAgo(item.start_time) > 7 && daysAgo(item.start_time) <= 30);
+  const chronicWeeklyHours = chronicBase.length ? hoursFor(chronicBase) / (23 / 7) : null;
+  const loadRatio = chronicWeeklyHours ? acuteHours / chronicWeeklyHours : null;
+  const loadPct = Math.max(0, Math.min(100, ((loadRatio || 0) / 1.6) * 100));
+  const loadLabel = !loadRatio
+    ? 'nog niet genoeg data'
+    : loadRatio < 0.8
+      ? 'lage belasting'
+      : loadRatio <= 1.3
+        ? 'stabiele opbouw'
+        : 'hoge sprong';
+  const headline = period === 7
+    ? 'Korte termijn: focus op recente sessies'
+    : loadRatio && loadRatio > 1.3
+      ? 'Belasting stijgt snel'
+      : loadRatio && loadRatio < 0.8
+        ? 'Belasting ligt lager dan je basis'
+        : 'Belasting blijft in balans';
+
   return (
     <div className="card dark" style={{ position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2,
@@ -246,33 +286,36 @@ function TrendCard({ weeklyTrend }) {
                     alignItems: 'start', marginBottom: 24 }}>
         <div>
           <span className="label">Trendinzicht</span>
-          <h2 style={{ marginTop: 10, color: '#fff' }}>Volume daalt, intensiteit blijft</h2>
+          <h2 style={{ marginTop: 10, color: '#fff' }}>{headline}</h2>
         </div>
         <span className="tag" style={{ background: 'oklch(35% 0.005 100)',
-          color: 'oklch(85% 0.005 100)' }}>30d</span>
+          color: 'oklch(85% 0.005 100)' }}>{period}d</span>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-        <DeltaStat label="Duur/week" delta={fmt(dDur)} sub="vs basislijn" trend={dDur < 0 ? 'down' : 'up'} />
-        <DeltaStat label="Afstand/week" delta={fmt(dDis)} sub="vs basislijn" trend={dDis < 0 ? 'down' : 'up'} />
-        <DeltaStat label="Avg HR" delta={`${dHr >= 0 ? '+' : ''}${dHr.toFixed(0)} bpm`} sub="vs basislijn" trend={Math.abs(dHr) < 2 ? 'flat' : (dHr < 0 ? 'down' : 'up')} />
+        <DeltaStat label="Trainingstijd/week" delta={fmt(dDur)} sub="tweede helft vs eerste helft" trend={dDur < 0 ? 'down' : 'up'} />
+        <DeltaStat label="Afstand/week" delta={fmt(dDis)} sub="tweede helft vs eerste helft" trend={dDis < 0 ? 'down' : 'up'} />
+        <DeltaStat label="Hartslag" delta={`${dHr >= 0 ? '+' : ''}${dHr.toFixed(0)} bpm`} sub="gem. sessie-HR verschil" trend={Math.abs(dHr) < 2 ? 'flat' : (dHr < 0 ? 'down' : 'up')} />
       </div>
 
       <div style={{ height: 1, background: 'oklch(25% 0.005 100)', margin: '24px 0' }}></div>
 
       <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
         textTransform: 'uppercase', letterSpacing: '.14em', marginBottom: 10 }}>
-        Load ratio (acute / chronic)
+        Belastingbalans
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <div className="mono" style={{ fontSize: 36, fontWeight: 500,
           color: '#fff', letterSpacing: '-.02em' }}>
-          0.74
+          {loadRatio ? loadRatio.toFixed(2) : '–'}
         </div>
         <div style={{ color: 'oklch(78% 0.16 60)', fontSize: 13 }}>
-          undertraining zone
+          {loadLabel}
         </div>
       </div>
+      <p style={{ color: 'oklch(76% 0.01 100)', fontSize: 12, lineHeight: 1.45, margin: '8px 0 0' }}>
+        Verhouding tussen je trainingstijd van de laatste 7 dagen en je normale weekvolume uit de weken ervoor.
+      </p>
       {/* Load gauge */}
       <div style={{ marginTop: 12, height: 8, borderRadius: 4, background: 'oklch(25% 0.005 100)',
                     position: 'relative', overflow: 'hidden' }}>
@@ -289,7 +332,7 @@ function TrendCard({ weeklyTrend }) {
           background: 'oklch(67% 0.20 25)', opacity: .4,
         }}></div>
         <div style={{
-          position: 'absolute', left: '37%', top: -3, bottom: -3, width: 3,
+          position: 'absolute', left: `${loadPct}%`, top: -3, bottom: -3, width: 3,
           background: 'var(--accent)', borderRadius: 2,
         }}></div>
       </div>
@@ -341,7 +384,7 @@ function SportBreakdown({ allActivities, sportFilter, setSportFilter }) {
       <span className="label">Sport verdeling</span>
       <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {items.map(it => {
-          const pct = it.key === 'ALL' ? 1 : (it.n / total);
+          const pct = total ? (it.key === 'ALL' ? 1 : (it.n / total)) : 0;
           const active = sportFilter === it.key;
           return (
             <button key={it.key} onClick={() => setSportFilter(it.key)}
