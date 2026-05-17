@@ -1,0 +1,10 @@
+# Local development: publish ports on the host.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+services:
+  db:
+    ports:
+      - "${DB_PORT:-5432}:5432"
+
+  app:
+    ports:
+      - "${APP_HOST_PORT:-8000}:8000"
