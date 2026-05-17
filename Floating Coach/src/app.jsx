@@ -10,8 +10,12 @@ function App() {
   const apiStatus = window.useApiStatus();
   const recoveryScore = DEFAULT_RECOVERY;
 
-  // Initial screen: if user_id is in URL or stored, skip onboarding.
-  const [screen, setScreen] = useStateApp(() => session.userId ? 'dashboard' : 'onboarding');
+  // Initial screen: OAuth paths like /dashboard?user_id=… or stored session → dashboard
+  const [screen, setScreen] = useStateApp(() => {
+    const path = (window.location.pathname || '/').replace(/\/$/, '') || '/';
+    if (session.userId && (path === '/dashboard' || path === '/')) return 'dashboard';
+    return session.userId ? 'dashboard' : 'onboarding';
+  });
 
   // Live user profile from /web/auth/me (name, garmin_connected).
   const [profile, setProfile] = useStateApp(null);
@@ -31,15 +35,20 @@ function App() {
     document.documentElement.style.setProperty('--accent-ink', ACCENT_INK);
   }, []);
 
-  // If a Garmin OAuth callback arrived with ?user_id=, clean the URL but keep the session.
+  // Garmin OAuth callback: ?user_id= & optional /dashboard path → normalize URL to /
   useEffectApp(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.has('user_id')) {
-      params.delete('user_id');
+    const hadUser = params.has('user_id');
+    const hadGarmin = params.has('garmin_connected');
+    if (hadUser) params.delete('user_id');
+    if (hadGarmin) params.delete('garmin_connected');
+    const onDashboardPath = window.location.pathname.replace(/\/$/, '') === '/dashboard';
+    if (hadUser || hadGarmin || onDashboardPath) {
+      if (session.userId) setScreen('dashboard');
       const q = params.toString();
-      window.history.replaceState({}, '', window.location.pathname + (q ? `?${q}` : ''));
+      window.history.replaceState({}, '', '/' + (q ? `?${q}` : ''));
     }
-  }, []);
+  }, [session.userId]);
 
   const SCREENS = {
     dashboard:  { label: 'Dashboard',    ico: '◆', Comp: window.Dashboard },

@@ -351,7 +351,7 @@ async def oauth_callback(
         # Redirect the user back to the web app after successful OAuth.
         from fastapi.responses import HTMLResponse
         base_webapp_url = settings.webapp_url.rstrip("/")
-        redirect_url = f"{base_webapp_url}/dashboard?garmin_connected=1&user_id={user_id}"
+        redirect_url = f"{base_webapp_url}/?garmin_connected=1&user_id={user_id}"
         html_content = f"""
 <!DOCTYPE html>
 <html>
