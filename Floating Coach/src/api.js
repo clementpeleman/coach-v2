@@ -1,20 +1,23 @@
-// API client — mirrors webapp/src/lib/api.ts.
-// All endpoints from app/api/main.py and app/api/web.py.
-// Defaults to http://localhost:8000 but the user can override via Tweaks.
+// API client — same endpoints as FastAPI (via gateway on production domain).
 (function () {
-  const DEFAULT_BASE = 'http://localhost:8000';
+  const LOCAL_DEV_BASE = 'http://localhost:8000';
 
-  function getBaseUrl() {
-    try {
-      const url = window.localStorage.getItem('fcApiUrl');
-      return (url && url.trim()) || DEFAULT_BASE;
-    } catch (_) {
-      return DEFAULT_BASE;
+  function defaultBaseUrl() {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      const host = window.location.hostname;
+      if (host !== 'localhost' && host !== '127.0.0.1') {
+        return window.location.origin;
+      }
     }
+    return LOCAL_DEV_BASE;
   }
 
-  function setBaseUrl(url) {
-    try { window.localStorage.setItem('fcApiUrl', url || ''); } catch (_) {}
+  function getBaseUrl() {
+    return defaultBaseUrl();
+  }
+
+  function setBaseUrl(_url) {
+    /* API base follows current origin in production */
   }
 
   async function getJson(path) {

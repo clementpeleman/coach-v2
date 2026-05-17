@@ -51,13 +51,26 @@ services:
       db:
         condition: service_healthy
 
+  # Floating Coach UI (static) — default public frontend
   frontend:
+    build:
+      context: "./Floating Coach"
+      dockerfile: Dockerfile
+    container_name: coach_frontend
+    expose:
+      - "80"
+    depends_on:
+      - app
+
+  # Legacy Next.js app (optional): docker compose --profile nextjs up -d
+  webapp:
+    profiles: ["nextjs"]
     build:
       context: ./webapp
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://coach.peleman.io}
-    container_name: coach_frontend
+    container_name: coach_webapp
     expose:
       - "3000"
     depends_on:
