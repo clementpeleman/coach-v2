@@ -2,6 +2,14 @@
 const { useState: useStateW } = React;
 const FCUW = window.FC_UTILS;
 
+const SPORT_OPTIONS = [
+  { key: 'WALKING', label: 'Wandelen', shortLabel: 'Wandel', garminType: 'WALKING', metric: 'pace', targetLabel: 'Tempo', targetText: 'wandeltempo' },
+  { key: 'RUNNING', label: 'Hardlopen', shortLabel: 'Run', garminType: 'RUNNING', metric: 'pace', targetLabel: 'Tempo', targetText: 'looptempo' },
+  { key: 'CYCLING', label: 'Fietsen', shortLabel: 'Fiets', garminType: 'CYCLING', metric: 'speed', targetLabel: 'Snelheid', targetText: 'snelheid' },
+  { key: 'INDOOR_CYCLING', label: 'Indoor fietsen', shortLabel: 'Zwift', garminType: 'INDOOR_CYCLING', metric: 'speed', targetLabel: 'Snelheid', targetText: 'Zwift-snelheid' },
+  { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo', targetText: 'zwemtempo' },
+];
+
 function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
   const D = window.FC_DATA;
   const online = apiStatus === 'online';
@@ -15,19 +23,28 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
   const deviceName = latestActivity?.raw_data?.deviceName || latestActivity?.device_name || 'Garmin Connect';
   const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
 
-  const blocks = buildStructure(rec.type);
-  const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
+  const [sportType, setSportType] = useStateW(sportFromRecommendation(rec.sport));
   const [targetMode, setTargetMode] = useStateW('pace');
   const [intensityPct, setIntensityPct] = useStateW(100);
+  const selectedSport = SPORT_OPTIONS.find((sport) => sport.key === sportType) || SPORT_OPTIONS[1];
+  const primaryTargetLabel = selectedSport.targetLabel;
+  const primaryTargetText = selectedSport.targetText;
+  const blocks = buildStructure(rec.type, sportType);
+  const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
   const adjustedBlocks = blocks.map((block) => ({
     ...block,
     adjustedHr: adjustHrRange(block.hr, intensityPct),
     adjustedPace: adjustPaceRange(block.pace, intensityPct),
+    adjustedSpeed: adjustSpeedRange(block.speed, intensityPct),
   }));
   const workBlocks = adjustedBlocks.filter((b) => !['Z1'].includes(b.zone));
   const mainTarget = workBlocks[0] || adjustedBlocks[1] || adjustedBlocks[0];
-  const targetLabel = targetMode === 'pace' ? 'Tempo/snelheid' : 'Hartslag';
-  const targetValue = targetMode === 'pace' ? mainTarget?.adjustedPace : `${mainTarget?.adjustedHr} bpm`;
+  const primaryTargetValue = selectedSport.metric === 'speed' ? mainTarget?.adjustedSpeed : mainTarget?.adjustedPace;
+  const targetLabel = targetMode === 'pace' ? primaryTargetLabel : 'Hartslag';
+  const targetValue = targetMode === 'pace' ? primaryTargetValue : `${mainTarget?.adjustedHr} bpm`;
+  const getPrimaryTarget = (block) => (
+    selectedSport.metric === 'speed' ? block.adjustedSpeed : block.adjustedPace
+  ) || 'vrij';
 
   return (
     <div data-screen-label="Workout detail" className="col" style={{ gap: 24 }}>
@@ -35,7 +52,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
         <div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
             <span className="tag accent">{rec.type}</span>
-            <span className="tag">{rec.sport}</span>
+            <span className="tag">{selectedSport.label}</span>
             <span className="tag" style={{ background: 'transparent', border: '1px solid var(--line)' }}>
               {rec.intensity}
             </span>
@@ -71,10 +88,25 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
               </span>
             </div>
           </div>
-          <div style={{ width: 360 }}>
+          <div style={{ width: 400 }}>
+            <div className="mono" style={{ color: 'oklch(70% 0.01 100)', fontSize: 10,
+              textTransform: 'uppercase', letterSpacing: '.14em', marginBottom: 8 }}>
+              Sport
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 5, marginBottom: 14 }}>
+              {SPORT_OPTIONS.map((sport) => (
+                <button key={sport.key} onClick={() => setSportType(sport.key)}
+                  className={sportType === sport.key ? 'btn accent' : 'btn ghost'}
+                  style={{ justifyContent: 'center', color: sportType === sport.key ? undefined : '#fff',
+                    borderColor: sportType === sport.key ? undefined : 'oklch(35% 0.005 100)',
+                    padding: '8px 6px', fontSize: 11, minWidth: 0 }}>
+                  {sport.shortLabel}
+                </button>
+              ))}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
               {[
-                ['pace', 'Tempo'],
+                ['pace', primaryTargetLabel],
                 ['hr', 'Hartslag'],
               ].map(([mode, label]) => (
                 <button key={mode} onClick={() => setTargetMode(mode)}
@@ -114,7 +146,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
               <span className="tag accent">{mainTarget?.zone}</span>
             </div>
             <div style={{ fontSize: 14, color: 'oklch(78% 0.01 100)', marginTop: 6 }}>
-              Gebruik <b>{targetMode === 'pace' ? 'tempo/snelheid' : 'hartslag'}</b> als primaire sturing. Hartslag blijft nuttig als veiligheidscheck.
+              Gebruik <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> als primaire sturing. Hartslag blijft nuttig als veiligheidscheck.
             </div>
           </div>
 
@@ -198,8 +230,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
                   <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)',
                     marginTop: 4 }}>
                     {targetMode === 'pace'
-                      ? `Tempo: ${b.adjustedPace || 'vrij'} · HR check: ${b.adjustedHr} bpm`
-                      : `HR doel: ${b.adjustedHr} bpm · Tempo indicatie: ${b.adjustedPace || 'vrij'}`}
+                      ? `${primaryTargetLabel}: ${getPrimaryTarget(b)} · HR check: ${b.adjustedHr} bpm`
+                      : `HR doel: ${b.adjustedHr} bpm · ${primaryTargetLabel} indicatie: ${getPrimaryTarget(b)}`}
                   </div>
                 </div>
                 <div className="mono" style={{ fontSize: 14, color: 'var(--ink-3)',
@@ -229,6 +261,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
                 <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>
                   {online && userId ? 'Verbonden via Garmin OAuth' : 'Wachten op Garmin login'}
                 </div>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>
+                  Garmin sporttype: {selectedSport.garminType}
+                </div>
               </div>
             </div>
             <button className="btn" style={{ marginTop: 14, width: '100%', justifyContent: 'center' }}>
@@ -243,8 +278,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
           <div className="card tight">
             <span className="label">Coach notitie</span>
             <p style={{ fontSize: 14, lineHeight: 1.55, marginTop: 10, color: 'var(--ink-2)' }}>
-              {rec.desc} Met je <b>recovery {recoveryScore}/6</b> ben je hier prima op gecondityioneerd.
-              Deze versie stuurt primair op <b>{targetMode === 'pace' ? 'tempo/snelheid' : 'hartslag'}</b> en staat op <b>{intensityPct}%</b>.
+              {rec.desc} Met je <b>recovery {recoveryScore}/6</b> ben je hier prima op geconditioneerd.
+              Deze versie is ingesteld voor <b>{selectedSport.label.toLowerCase()}</b>, stuurt primair op <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> en staat op <b>{intensityPct}%</b>.
               Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>
             <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
@@ -299,19 +334,82 @@ function secondsToPace(seconds) {
   const rounded = Math.max(1, Math.round(seconds));
   const m = Math.floor(rounded / 60);
   const s = rounded % 60;
-  return `${m}:${String(s).padStart(2, '0')}/km`;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function adjustPaceRange(range, pct) {
   if (!range) return null;
-  const parts = String(range).replace('/km', '').split('-').map((p) => p.trim()).filter(Boolean);
+  const suffix = String(range).includes('/100m') ? '/100m' : '/km';
+  const parts = String(range).replace(suffix, '').split('-').map((p) => p.trim()).filter(Boolean);
   if (!parts.length) return range;
   const factor = 100 / pct;
   const adjusted = parts.map((p) => secondsToPace(paceToSeconds(p) * factor));
-  return adjusted.length >= 2 ? adjusted.join('-') : adjusted[0];
+  return `${adjusted.length >= 2 ? adjusted.join('-') : adjusted[0]}${suffix}`;
 }
 
-function buildStructure(type) {
+function adjustSpeedRange(range, pct) {
+  if (!range) return null;
+  const nums = String(range).match(/\d+(\.\d+)?/g);
+  if (!nums || nums.length === 0) return range;
+  const adjusted = nums.map((n) => Math.round(Number(n) * pct / 100));
+  if (String(range).trim().startsWith('>')) return `> ${adjusted[0]} km/u`;
+  return `${adjusted.length >= 2 ? adjusted.join('-') : adjusted[0]} km/u`;
+}
+
+function sportFromRecommendation(sport) {
+  const normalized = String(sport || '').toLowerCase();
+  if (normalized.includes('fiets') || normalized.includes('cycling')) return 'CYCLING';
+  if (normalized.includes('zwem') || normalized.includes('swim')) return 'SWIMMING';
+  if (normalized.includes('wandel') || normalized.includes('walk')) return 'WALKING';
+  return 'RUNNING';
+}
+
+function metricForSport(sportType, zone) {
+  const table = {
+    WALKING: {
+      rest: { pace: '9:30-11:00/km' },
+      z1: { pace: '9:00-10:15/km' },
+      z2: { pace: '8:15-9:15/km' },
+      z4: { pace: '7:10-8:00/km' },
+      z5: { pace: '6:30-7:15/km' },
+    },
+    RUNNING: {
+      rest: { pace: '8:00-10:00/km' },
+      z1: { pace: '6:45-7:40/km' },
+      z2: { pace: '5:55-6:35/km' },
+      z4: { pace: '4:55-5:15/km' },
+      z5: { pace: '4:25-4:45/km' },
+    },
+    CYCLING: {
+      rest: { speed: '16-20 km/u' },
+      z1: { speed: '19-23 km/u' },
+      z2: { speed: '24-28 km/u' },
+      z4: { speed: '31-35 km/u' },
+      z5: { speed: '37-43 km/u' },
+    },
+    INDOOR_CYCLING: {
+      rest: { speed: '18-22 km/u' },
+      z1: { speed: '22-26 km/u' },
+      z2: { speed: '27-32 km/u' },
+      z4: { speed: '34-40 km/u' },
+      z5: { speed: '42-50 km/u' },
+    },
+    SWIMMING: {
+      rest: { pace: '2:45-3:15/100m' },
+      z1: { pace: '2:25-2:55/100m' },
+      z2: { pace: '2:05-2:25/100m' },
+      z4: { pace: '1:45-2:00/100m' },
+      z5: { pace: '1:30-1:45/100m' },
+    },
+  };
+  return table[sportType]?.[zone] || table.RUNNING[zone] || {};
+}
+
+function withSportTarget(block, sportType, metricZone) {
+  return { ...block, ...metricForSport(sportType, metricZone || block.metricZone || 'z1') };
+}
+
+function buildStructure(type, sportType = 'RUNNING') {
   const colors = {
     rest:   'oklch(48% 0.05 220)',
     z1:     'oklch(55% 0.06 220)',
@@ -321,37 +419,37 @@ function buildStructure(type) {
     z5:     'oklch(68% 0.22 25)',
   };
   if (type === 'HERSTEL') return [
-    { label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', pace: '7:00-8:00/km', color: colors.z1 },
-    { label: 'Easy walk', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', pace: '8:00-10:00/km', color: colors.rest },
-    { label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '110-120', pace: '7:30-9:00/km', color: colors.z1 },
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: sportType === 'WALKING' ? 'Rustige wandeling' : 'Easy blok', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', color: colors.rest }, sportType, 'rest'),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '110-120', color: colors.z1 }, sportType, 'z1'),
   ];
   if (type === 'DUUR') return [
-    { label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 8*60, hr: '125-135', pace: '6:40-7:20/km', color: colors.z1 },
-    { label: 'Duurblok zone 2', shortLabel: 'Z2 Duur', zone: 'Z2', sec: 45*60, hr: '138-152', pace: '5:55-6:35/km', color: colors.z2 },
-    { label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', pace: '6:45-7:40/km', color: colors.z1 },
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 8*60, hr: '125-135', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Duurblok zone 2', shortLabel: 'Z2 Duur', zone: 'Z2', sec: 45*60, hr: '138-152', color: colors.z2 }, sportType, 'z2'),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
   ];
   if (type === 'THRESHOLD') return [
-    { label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', pace: '6:30-7:15/km', color: colors.z1 },
-    { label: 'Tempo blok 1', shortLabel: 'Tempo 1', zone: 'Z4', sec: 12*60, hr: '162-170', pace: '4:55-5:15/km', color: colors.z4 },
-    { label: 'Actieve rust', shortLabel: 'Rust', zone: 'Z1', sec: 4*60, hr: '130-140', pace: '6:50-7:40/km', color: colors.z1 },
-    { label: 'Tempo blok 2', shortLabel: 'Tempo 2', zone: 'Z4', sec: 12*60, hr: '162-170', pace: '4:55-5:15/km', color: colors.z4 },
-    { label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', pace: '6:45-7:40/km', color: colors.z1 },
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Tempo blok 1', shortLabel: 'Tempo 1', zone: 'Z4', sec: 12*60, hr: '162-170', color: colors.z4 }, sportType, 'z4'),
+    withSportTarget({ label: 'Actieve rust', shortLabel: 'Rust', zone: 'Z1', sec: 4*60, hr: '130-140', color: colors.z1 }, sportType, 'z1'),
+    withSportTarget({ label: 'Tempo blok 2', shortLabel: 'Tempo 2', zone: 'Z4', sec: 12*60, hr: '162-170', color: colors.z4 }, sportType, 'z4'),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
   ];
   if (type === 'VO2MAX') return [
-    { label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', pace: '6:30-7:15/km', color: colors.z1 },
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1'),
     ...Array(6).fill(0).flatMap(() => [
-      { label: 'VO2 interval', shortLabel: 'VO2', zone: 'Z5', sec: 3*60, hr: '175-185', pace: '4:25-4:45/km', color: colors.z5 },
-      { label: 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 3*60, hr: '130-140', pace: '7:00-8:00/km', color: colors.z1 },
+      withSportTarget({ label: 'VO2 interval', shortLabel: 'VO2', zone: 'Z5', sec: 3*60, hr: '175-185', color: colors.z5 }, sportType, 'z5'),
+      withSportTarget({ label: 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 3*60, hr: '130-140', color: colors.z1 }, sportType, 'z1'),
     ]),
-    { label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', pace: '6:45-7:40/km', color: colors.z1 },
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
   ];
   if (type === 'SPRINT') return [
-    { label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', pace: '6:30-7:15/km', color: colors.z1 },
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, sportType, 'z1'),
     ...Array(10).fill(0).flatMap(() => [
-      { label: 'Sprint', shortLabel: 'SP', zone: 'Z5', sec: 30, hr: '> 180', pace: '3:45-4:10/km', color: colors.z5 },
-      { label: 'Walk', shortLabel: 'walk', zone: 'Z1', sec: 90, hr: '110-130', pace: '8:00-10:00/km', color: colors.rest },
+      withSportTarget({ label: 'Sprint', shortLabel: 'SP', zone: 'Z5', sec: 30, hr: '> 180', color: colors.z5 }, sportType, 'z5'),
+      withSportTarget({ label: sportType === 'WALKING' ? 'Rustig wandelen' : 'Herstel', shortLabel: 'rust', zone: 'Z1', sec: 90, hr: '110-130', color: colors.rest }, sportType, 'rest'),
     ]),
-    { label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', pace: '6:45-7:40/km', color: colors.z1 },
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, sportType, 'z1'),
   ];
   return [];
 }
