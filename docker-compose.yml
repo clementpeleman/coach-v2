@@ -37,6 +37,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       DB_PORT: ${DB_PORT}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GARMIN_CONSUMER_KEY: ${GARMIN_CONSUMER_KEY:-}
+      GARMIN_CONSUMER_SECRET: ${GARMIN_CONSUMER_SECRET:-}
+      GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-}
+      WEBAPP_URL: ${WEBAPP_URL:-http://localhost:8000}
     volumes:
       - .:/app
     command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
@@ -54,7 +60,9 @@ services:
     depends_on:
       - app
 
+  # Optional: docker compose --profile telegram up -d
   bot:
+    profiles: ["telegram"]
     build: .
     container_name: coach_bot
     env_file:
@@ -68,6 +76,8 @@ services:
       DB_NAME: ${DB_NAME}
       DB_PORT: ${DB_PORT}
       API_URL: http://app:8000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - .:/app
     command: python chat_interface/telegram_bot.py

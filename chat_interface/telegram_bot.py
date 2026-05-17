@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 # Use validated token from settings
 TOKEN = settings.telegram_bot_token
 
+if not TOKEN:
+    logger.error(
+        "TELEGRAM_BOT_TOKEN is not set. Start with: docker compose --profile telegram up -d"
+    )
+    sys.exit(1)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
     if not update.message:

@@ -168,6 +168,12 @@ async def web_me(user_id: int, db: Session = Depends(get_db)):
 @router.post("/chat", response_model=ChatResponse)
 async def web_chat(payload: ChatRequest):
     """Chat with the existing coach agent."""
+    if not settings.openai_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENAI_API_KEY is niet geconfigureerd op de server.",
+        )
+
     try:
         from langchain_core.messages import AIMessage, HumanMessage
         from app.agents.conversational_agent import create_conversational_agent

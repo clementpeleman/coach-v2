@@ -1,43 +1,49 @@
 """Application configuration and environment validation."""
-import os
+from functools import lru_cache
 from typing import Optional
-from pydantic_settings import BaseSettings
+
 from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings with environment variable validation."""
 
-    # Telegram Configuration (optional for webapp-only mode)
-    telegram_bot_token: Optional[str] = Field(default=None, env="TELEGRAM_BOT_TOKEN")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
-    # OpenAI Configuration
-    openai_api_key: str = Field(..., env="OPENAI_API_KEY")
+    # Telegram (optional — webapp-only deployments skip this)
+    telegram_bot_token: Optional[str] = Field(default=None)
 
-    # Database Configuration (optional - can use individual DB_* variables instead)
-    database_url: Optional[str] = Field(default=None, env="DATABASE_URL")
-    db_user: Optional[str] = Field(default=None, env="DB_USER")
-    db_password: Optional[str] = Field(default=None, env="DB_PASSWORD")
-    db_host: Optional[str] = Field(default=None, env="DB_HOST")
-    db_port: Optional[str] = Field(default=None, env="DB_PORT")
-    db_name: Optional[str] = Field(default=None, env="DB_NAME")
+    # OpenAI (optional at startup; required when using /web/chat)
+    openai_api_key: Optional[str] = Field(default=None)
 
-    # Security Configuration
-    encryption_key: str = Field(..., env="ENCRYPTION_KEY")
+    # Database (optional — built from DB_* in database.py when empty)
+    database_url: Optional[str] = Field(default=None)
+    db_user: Optional[str] = Field(default=None)
+    db_password: Optional[str] = Field(default=None)
+    db_host: Optional[str] = Field(default=None)
+    db_port: Optional[str] = Field(default=None)
+    db_name: Optional[str] = Field(default=None)
 
-    # Garmin Configuration (optional for development)
-    garmin_consumer_key: Optional[str] = Field(default=None, env="GARMIN_CONSUMER_KEY")
-    garmin_consumer_secret: Optional[str] = Field(default=None, env="GARMIN_CONSUMER_SECRET")
-    garmin_redirect_uri: Optional[str] = Field(default=None, env="GARMIN_REDIRECT_URI")
-    webapp_url: str = Field(default="http://localhost:8000", env="WEBAPP_URL")
+    # Security
+    encryption_key: str
+
+    # Garmin
+    garmin_consumer_key: Optional[str] = Field(default=None)
+    garmin_consumer_secret: Optional[str] = Field(default=None)
+    garmin_redirect_uri: Optional[str] = Field(default=None)
+    webapp_url: str = Field(default="http://localhost:8000")
 
     @field_validator("encryption_key")
     @classmethod
     def validate_encryption_key(cls, v: str) -> str:
-        """Validate that encryption key is properly formatted for Fernet."""
         if not v:
             raise ValueError("ENCRYPTION_KEY cannot be empty")
-        # Fernet keys should be 44 characters (32 bytes base64 encoded)
         if len(v) != 44:
             raise ValueError(
                 "ENCRYPTION_KEY must be 44 characters long. "
@@ -45,18 +51,25 @@ class Settings(BaseSettings):
             )
         return v
 
-    @field_validator("telegram_bot_token")
+    @field_validator("telegram_bot_token", mode="before")
     @classmethod
-    def validate_telegram_token(cls, v: Optional[str]) -> Optional[str]:
-        """Validate Telegram bot token format if provided."""
-        if v and ":" not in v:
+    def empty_telegram_token_to_none(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str) and ":" not in v:
+            return None
+        return v
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def empty_openai_key_to_none(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or (isinstance(v, str) and not v.strip()):
             return None
         return v
 
     @field_validator("garmin_redirect_uri")
     @classmethod
     def validate_garmin_redirect_uri(cls, v: Optional[str]) -> Optional[str]:
-        """Validate Garmin redirect URI format."""
         if v and not v.startswith("https://"):
             raise ValueError("GARMIN_REDIRECT_URI must start with https://")
         return v
@@ -64,33 +77,15 @@ class Settings(BaseSettings):
     @field_validator("webapp_url")
     @classmethod
     def validate_webapp_url(cls, v: str) -> str:
-        """Validate web app URL format."""
         if not v.startswith(("http://", "https://")):
             raise ValueError("WEBAPP_URL must start with http:// or https://")
         return v
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        extra = "ignore"
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
 
 
-def validate_environment() -> Settings:
-    """
-    Validate all required environment variables are present and properly formatted.
-
-    Returns:
-        Settings object with validated configuration
-
-    Raises:
-        ValueError: If any required environment variable is missing or invalid
-    """
-    try:
-        settings = Settings()
-        return settings
-    except Exception as e:
-        raise ValueError(f"Environment validation failed: {e}")
-
-
-# Global settings instance
-settings = validate_environment()
+# Backwards-compatible module-level accessor
+settings = get_settings()
