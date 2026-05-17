@@ -129,6 +129,8 @@ class GarminAPIClient:
             start_time = None
             if 'startTimeInSeconds' in summary:
                 start_time = datetime.utcfromtimestamp(summary['startTimeInSeconds'])
+            elif isinstance(summary.get('summary'), dict) and summary['summary'].get('startTimeInSeconds'):
+                start_time = datetime.utcfromtimestamp(summary['summary']['startTimeInSeconds'])
             elif 'measurementTimeInSeconds' in summary:
                 start_time = datetime.utcfromtimestamp(summary['measurementTimeInSeconds'])
 

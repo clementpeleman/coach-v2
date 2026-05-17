@@ -35,6 +35,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
   const selectedSport = SPORT_OPTIONS.find((sport) => sport.key === sportType) || SPORT_OPTIONS[1];
   const personalSportProfile = trainingProfileQuery.data.personal_targets?.[sportType];
   const personalConfidence = personalSportProfile?.confidence || 'none';
+  const detailSegments = personalSportProfile?.detail_segments || 0;
   const primaryTargetLabel = selectedSport.targetLabel;
   const primaryTargetText = selectedSport.targetText;
   const blocks = buildStructure(rec.type, sportType, personalSportProfile);
@@ -159,7 +160,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
             <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
               textTransform: 'uppercase', letterSpacing: '.12em', marginTop: 8 }}>
               {personalSportProfile
-                ? `Persoonlijk profiel · ${personalSportProfile.sessions} sessies · vertrouwen ${personalConfidence}`
+                ? `Persoonlijk profiel · ${personalSportProfile.sessions} sessies · ${detailSegments} detailsegmenten · vertrouwen ${personalConfidence}`
                 : 'Fallback targets · nog te weinig sportdata'}
             </div>
           </div>
@@ -246,6 +247,11 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
                     {targetMode === 'pace'
                       ? `${primaryTargetLabel}: ${getPrimaryTarget(b)} · HR check: ${b.adjustedHr} bpm`
                       : `HR doel: ${b.adjustedHr} bpm · ${primaryTargetLabel} indicatie: ${getPrimaryTarget(b)}`}
+                    {b.personalized && (
+                      <span style={{ color: 'var(--ink-3)' }}>
+                        {' '}· geleerd uit {b.source === 'activityDetails' ? 'details/laps' : 'sessies'}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="mono" style={{ fontSize: 14, color: 'var(--ink-3)',
@@ -295,7 +301,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
               {rec.desc} Met je <b>recovery {recoveryScore}/6</b> ben je hier prima op geconditioneerd.
               Deze versie is ingesteld voor <b>{selectedSport.label.toLowerCase()}</b>, stuurt primair op <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> en staat op <b>{intensityPct}%</b>.
               {personalSportProfile
-                ? ` Targets zijn geleerd uit je laatste ${personalSportProfile.sessions} ${selectedSport.label.toLowerCase()}-sessies.`
+                ? ` Targets zijn geleerd uit je laatste ${personalSportProfile.sessions} ${selectedSport.label.toLowerCase()}-sessies${detailSegments ? ` en ${detailSegments} detailsegmenten` : ''}.`
                 : ' Ik gebruik voorlopig ruime standaardtargets tot er meer sessies binnen zijn.'}
               Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>
@@ -444,6 +450,7 @@ function withSportTarget(block, sportType, metricZone, personalProfile) {
     ...personalTarget,
     hr: personalZone?.hr || block.hr,
     personalized: Boolean(personalMetric || personalZone?.hr),
+    source: personalZone?.source || 'fallback',
   };
 }
 

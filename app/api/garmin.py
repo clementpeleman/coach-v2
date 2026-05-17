@@ -339,6 +339,14 @@ def _activity_raw(activity: GarminActivityData) -> Dict:
         return {}
 
 
+def _auxiliary_raw(record: GarminActivityAuxiliaryData) -> Dict:
+    """Parse an auxiliary Garmin payload such as activityDetails."""
+    try:
+        return json.loads(record.data) if isinstance(record.data, str) else (record.data or {})
+    except Exception:
+        return {}
+
+
 def normalize_training_sport(activity: GarminActivityData) -> str:
     """Map Garmin activity types to the sport buckets used by the coach UI."""
     activity_type = (activity.activity_type or "").upper()
@@ -364,6 +372,26 @@ def normalize_training_sport(activity: GarminActivityData) -> str:
     return activity_type or "UNKNOWN"
 
 
+def _normalize_detail_sport(detail: Dict, fallback: str) -> str:
+    summary = detail.get("summary") if isinstance(detail.get("summary"), dict) else detail
+    activity_type = str(summary.get("activityType") or detail.get("activityType") or fallback).upper()
+    name = str(summary.get("activityName") or detail.get("activityName") or "").lower()
+    combined = f"{activity_type} {name}"
+    if "SWIM" in combined:
+        return "SWIMMING"
+    if ("INDOOR" in combined or "ZWIFT" in combined or "VIRTUAL" in combined) and (
+        "CYCLE" in combined or "BIKE" in combined or "CYCLING" in combined
+    ):
+        return "INDOOR_CYCLING"
+    if "CYCLE" in combined or "BIKE" in combined or "CYCLING" in combined:
+        return "CYCLING"
+    if "WALK" in combined or "WANDEL" in combined:
+        return "WALKING"
+    if "RUN" in combined:
+        return "RUNNING"
+    return fallback
+
+
 def _activity_metric(activity: GarminActivityData, sport: str) -> Optional[float]:
     """Return the primary sport metric: pace seconds/unit or speed km/h."""
     distance = activity.distance or 0
@@ -376,6 +404,19 @@ def _activity_metric(activity: GarminActivityData, sport: str) -> Optional[float
     if sport == "SWIMMING":
         return duration / (distance / 100)
     return duration / (distance / 1000)
+
+
+def _segment_metric(segment: Dict, sport: str) -> Optional[float]:
+    duration = segment.get("duration_seconds") or 0
+    distance = segment.get("distance_meters") or 0
+    speed = segment.get("speed_mps")
+    if sport in {"CYCLING", "INDOOR_CYCLING"}:
+        if speed:
+            return speed * 3.6
+        return (distance / duration) * 3.6 if distance > 0 and duration > 0 else None
+    if sport == "SWIMMING":
+        return duration / (distance / 100) if distance > 0 and duration > 0 else None
+    return duration / (distance / 1000) if distance > 0 and duration > 0 else None
 
 
 def _percentile(values: list[float], percentile: float) -> Optional[float]:
@@ -438,6 +479,123 @@ def _format_hr_range(hr_range: Optional[tuple[float, float]]) -> Optional[str]:
     return f"{round(low)}-{round(high)}"
 
 
+def _build_activity_detail_index(details: list[GarminActivityAuxiliaryData]) -> Dict[str, Dict]:
+    """Index activityDetails by all known Garmin identifiers."""
+    index: Dict[str, Dict] = {}
+    for record in details:
+        payload = _auxiliary_raw(record)
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else payload
+        keys = [
+            record.activity_id,
+            record.summary_id,
+            payload.get("activityId"),
+            payload.get("summaryId"),
+            summary.get("activityId") if isinstance(summary, dict) else None,
+            summary.get("summaryId") if isinstance(summary, dict) else None,
+        ]
+        for key in keys:
+            if key is not None:
+                index[str(key)] = payload
+                if str(key).endswith("-detail"):
+                    index[str(key).replace("-detail", "")] = payload
+    return index
+
+
+def _activity_detail_for(activity: GarminActivityData, detail_index: Dict[str, Dict]) -> Optional[Dict]:
+    keys = [
+        activity.activity_id,
+        activity.summary_id,
+        str(activity.summary_id).replace("-detail", "") if activity.summary_id else None,
+    ]
+    for key in keys:
+        if key is not None and str(key) in detail_index:
+            return detail_index[str(key)]
+    return None
+
+
+def _sample_elapsed(sample: Dict, first_start: Optional[int]) -> Optional[float]:
+    for key in ["timerDurationInSeconds", "movingDurationInSeconds", "clockDurationInSeconds"]:
+        value = sample.get(key)
+        if value is not None:
+            return float(value)
+    start = sample.get("startTimeInSeconds")
+    if start is not None and first_start is not None:
+        return float(start - first_start)
+    return None
+
+
+def _samples_to_segment(samples: list[Dict], sport: str) -> Optional[Dict]:
+    clean = [s for s in samples if isinstance(s, dict)]
+    if len(clean) < 2:
+        return None
+    first = clean[0]
+    last = clean[-1]
+    first_start = first.get("startTimeInSeconds")
+    start_elapsed = _sample_elapsed(first, first_start)
+    end_elapsed = _sample_elapsed(last, first_start)
+    if start_elapsed is None or end_elapsed is None:
+        return None
+    duration = max(0, end_elapsed - start_elapsed)
+    start_distance = first.get("totalDistanceInMeters")
+    end_distance = last.get("totalDistanceInMeters")
+    distance = max(0, (end_distance or 0) - (start_distance or 0)) if end_distance is not None and start_distance is not None else 0
+    hr_values = [s.get("heartRate") for s in clean if s.get("heartRate")]
+    speed_values = [s.get("speedMetersPerSecond") for s in clean if s.get("speedMetersPerSecond")]
+    avg_speed = sum(speed_values) / len(speed_values) if speed_values else ((distance / duration) if distance and duration else None)
+
+    if duration < 45:
+        return None
+    if sport != "SWIMMING" and distance <= 20 and not avg_speed:
+        return None
+
+    return {
+        "duration_seconds": duration,
+        "distance_meters": distance,
+        "heart_rate": sum(hr_values) / len(hr_values) if hr_values else None,
+        "speed_mps": avg_speed,
+        "sample_count": len(clean),
+    }
+
+
+def _segments_from_detail(detail: Dict, sport: str) -> list[Dict]:
+    """Extract useful effort segments from activityDetails samples and laps."""
+    detail_sport = _normalize_detail_sport(detail, sport)
+    samples = sorted(
+        [s for s in detail.get("samples", []) if isinstance(s, dict) and s.get("startTimeInSeconds")],
+        key=lambda s: s.get("startTimeInSeconds"),
+    )
+    if len(samples) < 2:
+        return []
+
+    laps = sorted(
+        [lap.get("startTimeInSeconds") for lap in detail.get("laps", []) if isinstance(lap, dict) and lap.get("startTimeInSeconds")],
+    )
+    segments: list[Dict] = []
+    if len(laps) >= 2:
+        boundaries = laps + [samples[-1]["startTimeInSeconds"] + 1]
+        for start, end in zip(boundaries, boundaries[1:]):
+            lap_samples = [sample for sample in samples if start <= sample.get("startTimeInSeconds", 0) < end]
+            segment = _samples_to_segment(lap_samples, detail_sport)
+            if segment:
+                segment["source"] = "lap"
+                segments.append(segment)
+    else:
+        first_start = samples[0].get("startTimeInSeconds")
+        bucket_seconds = 300
+        buckets: Dict[int, list[Dict]] = {}
+        for sample in samples:
+            elapsed = sample.get("startTimeInSeconds", first_start) - first_start
+            bucket = int(elapsed // bucket_seconds)
+            buckets.setdefault(bucket, []).append(sample)
+        for bucket_samples in buckets.values():
+            segment = _samples_to_segment(bucket_samples, detail_sport)
+            if segment:
+                segment["source"] = "sample_window"
+                segments.append(segment)
+
+    return segments
+
+
 def _classify_effort(activity: GarminActivityData, sport_max_hr: Optional[int]) -> str:
     name = (activity.activity_name or "").lower()
     if any(word in name for word in ["easy", "herstel", "recovery", "rustig", "walk", "wandel"]):
@@ -459,6 +617,26 @@ def _classify_effort(activity: GarminActivityData, sport_max_hr: Optional[int]) 
         return "vo2"
 
     return "endurance"
+
+
+def _classify_segment_effort(segment: Dict, sport_max_hr: Optional[int], metric: Optional[float], sport: str) -> str:
+    hr = segment.get("heart_rate")
+    if hr and sport_max_hr:
+        ratio = hr / sport_max_hr
+        if ratio < 0.70:
+            return "easy"
+        if ratio < 0.80:
+            return "endurance"
+        if ratio < 0.90:
+            return "threshold"
+        return "vo2"
+
+    duration = segment.get("duration_seconds") or 0
+    if duration >= 1200:
+        return "endurance"
+    if duration <= 240:
+        return "vo2"
+    return "threshold" if sport in {"RUNNING", "CYCLING", "INDOOR_CYCLING"} else "endurance"
 
 
 def _target_range_for_effort(
@@ -498,8 +676,12 @@ def _target_range_for_effort(
     return (low, high)
 
 
-def build_personal_training_profile(activities: list[GarminActivityData]) -> Dict:
-    """Build phase-1 personalized training targets from activity summaries."""
+def build_personal_training_profile(
+    activities: list[GarminActivityData],
+    details: Optional[list[GarminActivityAuxiliaryData]] = None,
+) -> Dict:
+    """Build personalized training targets from details/laps with summary fallback."""
+    detail_index = _build_activity_detail_index(details or [])
     sports: dict[str, list[GarminActivityData]] = {}
     for activity in activities:
         sport = normalize_training_sport(activity)
@@ -515,9 +697,28 @@ def build_personal_training_profile(activities: list[GarminActivityData]) -> Dic
         )
         metric_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
         hr_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
+        detail_metric_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
+        detail_hr_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
         all_metrics = []
+        detail_segment_count = 0
+        detail_activity_count = 0
 
         for activity in sport_activities:
+            detail = _activity_detail_for(activity, detail_index)
+            segments = _segments_from_detail(detail, sport) if detail else []
+            if segments:
+                detail_activity_count += 1
+                detail_segment_count += len(segments)
+                for segment in segments:
+                    metric = _segment_metric(segment, sport)
+                    effort = _classify_segment_effort(segment, sport_max_hr, metric, sport)
+                    if metric:
+                        detail_metric_values[effort].append(metric)
+                        all_metrics.append(metric)
+                    if segment.get("heart_rate"):
+                        detail_hr_values[effort].append(segment["heart_rate"])
+                continue
+
             effort = _classify_effort(activity, sport_max_hr)
             metric = _activity_metric(activity, sport)
             if metric:
@@ -528,19 +729,38 @@ def build_personal_training_profile(activities: list[GarminActivityData]) -> Dic
 
         zones = {}
         for effort in ["easy", "endurance", "threshold", "vo2"]:
-            metric_range = _target_range_for_effort(metric_values, all_metrics, sport, effort)
-            hr_range = _range_around(hr_values.get(effort, []), [a.average_heart_rate for a in sport_activities if a.average_heart_rate], True)
+            merged_metric_values = {
+                key: detail_metric_values[key] or metric_values[key]
+                for key in ["easy", "endurance", "threshold", "vo2"]
+            }
+            merged_hr_values = {
+                key: detail_hr_values[key] or hr_values[key]
+                for key in ["easy", "endurance", "threshold", "vo2"]
+            }
+            metric_range = _target_range_for_effort(merged_metric_values, all_metrics, sport, effort)
+            hr_range = _range_around(
+                merged_hr_values.get(effort, []),
+                [a.average_heart_rate for a in sport_activities if a.average_heart_rate],
+                True,
+            )
+            zone_sample_size = (
+                len(detail_metric_values.get(effort, []))
+                or len(metric_values.get(effort, []))
+                or len(detail_hr_values.get(effort, []))
+                or len(hr_values.get(effort, []))
+            )
             zones[effort] = {
                 "metric": _format_metric_range(metric_range, sport),
                 "hr": _format_hr_range(hr_range),
-                "sample_size": len(metric_values.get(effort, [])) or len(hr_values.get(effort, [])),
+                "sample_size": zone_sample_size,
+                "source": "activityDetails" if detail_metric_values.get(effort) or detail_hr_values.get(effort) else "activitySummaries",
             }
 
         session_count = len(sport_activities)
         confidence = "low"
-        if session_count >= 10:
+        if detail_segment_count >= 8 or session_count >= 10:
             confidence = "high"
-        elif session_count >= 4:
+        elif detail_segment_count >= 3 or session_count >= 4:
             confidence = "medium"
 
         profile[sport] = {
@@ -550,11 +770,13 @@ def build_personal_training_profile(activities: list[GarminActivityData]) -> Dic
             "metric_type": "speed" if sport in {"CYCLING", "INDOOR_CYCLING"} else "pace",
             "metric_unit": "km/u" if sport in {"CYCLING", "INDOOR_CYCLING"} else ("/100m" if sport == "SWIMMING" else "/km"),
             "max_heart_rate_observed": sport_max_hr,
+            "detail_activities": detail_activity_count,
+            "detail_segments": detail_segment_count,
             "zones": zones,
             "notes": [
-                "Gebaseerd op activity summaries; interval- en lapniveau volgt in fase 2."
-                if confidence != "high"
-                else "Gebaseerd op voldoende recente sessies; fase 2 kan dit verfijnen met laps/details."
+                "Gebaseerd op activityDetails samples/laps waar beschikbaar, met summary fallback."
+                if detail_segment_count
+                else "Gebaseerd op activity summaries; activityDetails ontbreken nog voor deze sport."
             ],
         }
 
@@ -1539,20 +1761,29 @@ async def training_profile(
             GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
             GarminActivityData.start_time >= start_date,
         ).order_by(GarminActivityData.start_time.desc()).all()
+        activity_details = db.query(GarminActivityAuxiliaryData).filter(
+            GarminActivityAuxiliaryData.user_id == resolved_user_id,
+            GarminActivityAuxiliaryData.summary_type == "activityDetails",
+            or_(
+                GarminActivityAuxiliaryData.start_time >= start_date,
+                GarminActivityAuxiliaryData.start_time.is_(None),
+            ),
+        ).order_by(GarminActivityAuxiliaryData.start_time.desc()).all()
 
         return {
             "period_days": days,
             "current_days": current_days,
             "generated_at": now.isoformat(),
-            "personal_targets": build_personal_training_profile(activities),
+            "personal_targets": build_personal_training_profile(activities, activity_details),
             "sport_baselines": build_sport_baselines(activities, current_days, now),
             "method": {
-                "phase": 1,
-                "source": "Garmin activity summaries",
+                "phase": 2,
+                "source": "Garmin activityDetails samples/laps with activity summary fallback",
+                "activity_details": len(activity_details),
                 "notes": [
-                    "Targets are learned per sport from recent sessions.",
+                    "Targets are learned per sport from detail segments where available.",
                     "Four-week load comparison is calculated inside the same sport type.",
-                    "Lap/activity-detail parsing is reserved for phase 2.",
+                    "Activity summaries remain the fallback when details are missing.",
                 ],
             },
         }
