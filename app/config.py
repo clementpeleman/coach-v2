@@ -8,8 +8,8 @@ from pydantic import Field, field_validator
 class Settings(BaseSettings):
     """Application settings with environment variable validation."""
 
-    # Telegram Configuration
-    telegram_bot_token: str = Field(..., env="TELEGRAM_BOT_TOKEN")
+    # Telegram Configuration (optional for webapp-only mode)
+    telegram_bot_token: Optional[str] = Field(default=None, env="TELEGRAM_BOT_TOKEN")
 
     # OpenAI Configuration
     openai_api_key: str = Field(..., env="OPENAI_API_KEY")
@@ -47,10 +47,10 @@ class Settings(BaseSettings):
 
     @field_validator("telegram_bot_token")
     @classmethod
-    def validate_telegram_token(cls, v: str) -> str:
-        """Validate Telegram bot token format."""
-        if not v or ":" not in v:
-            raise ValueError("Invalid TELEGRAM_BOT_TOKEN format")
+    def validate_telegram_token(cls, v: Optional[str]) -> Optional[str]:
+        """Validate Telegram bot token format if provided."""
+        if v and ":" not in v:
+            return None
         return v
 
     @field_validator("garmin_redirect_uri")

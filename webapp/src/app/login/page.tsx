@@ -1,81 +1,65 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { startDirectGarminOAuth } from "@/lib/api";
+import { useSessionUserId } from "@/lib/session";
+import { Zap, ArrowRight } from "lucide-react";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [savedMessage, setSavedMessage] = useState("");
+  const session = useSessionUserId();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const hasValidEmail = useMemo(() => email.includes("@"), [email]);
-
-  const handleDirectGarminConnect = async () => {
+  const handleConnect = async () => {
     try {
       setLoading(true);
-      setSavedMessage("");
-      const rawUserId = window.localStorage.getItem("sportsHubUserId");
-      const parsedUserId = rawUserId ? Number(rawUserId) : NaN;
+      setError(null);
       const response = await startDirectGarminOAuth({
-        userId: Number.isInteger(parsedUserId) && parsedUserId > 0 ? parsedUserId : undefined,
-        email: hasValidEmail ? email : undefined,
-        displayName: displayName || undefined,
+        userId: session.userId ?? undefined,
       });
       window.localStorage.setItem("sportsHubUserId", String(response.user_id));
       window.location.href = response.authorization_url;
-    } catch (error) {
-      setSavedMessage(error instanceof Error ? error.message : "Directe Garmin OAuth start mislukt.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Garmin OAuth start mislukt.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-6">
-      <h1 className="text-2xl font-semibold">Login & Garmin koppeling</h1>
-      <p className="mt-2 text-sm text-slate-600">
-        Koppel direct met Garmin OAuth. De app maakt automatisch een interne user en slaat je
-        user ID lokaal op.
-      </p>
-      <p className="mt-1 text-sm text-slate-600">
-        Als je al eerder bent ingelogd op dit toestel, hoef je email/naam niet opnieuw in te vullen.
+    <div className="mx-auto flex max-w-sm flex-col items-center py-20 text-center">
+      <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100">
+        <Zap className="h-8 w-8 text-emerald-600" />
+      </div>
+
+      <h1 className="text-2xl font-bold">Verbind je Garmin</h1>
+      <p className="mt-3 text-sm leading-relaxed text-slate-600">
+        Koppel je Garmin account om je activiteiten, hartslag en meer automatisch te
+        synchroniseren met Sports Hub.
       </p>
 
-      <div className="mt-6 max-w-sm">
-        <label className="mb-2 block text-sm font-medium" htmlFor="email">
-          Email
-        </label>
-        <input
-          id="email"
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          className="w-full rounded-md border border-slate-300 px-3 py-2"
-          placeholder="jij@voorbeeld.com"
-        />
-        <label className="mb-2 mt-3 block text-sm font-medium" htmlFor="display-name">
-          Naam (optioneel)
-        </label>
-        <input
-          id="display-name"
-          type="text"
-          value={displayName}
-          onChange={(event) => setDisplayName(event.target.value)}
-          className="w-full rounded-md border border-slate-300 px-3 py-2"
-          placeholder="Jouw naam"
-        />
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={handleDirectGarminConnect}
-            disabled={loading}
-            className="rounded-md bg-emerald-600 px-4 py-2 text-sm text-white"
-          >
-            {loading ? "Bezig..." : "Connect Garmin direct"}
-          </button>
-        </div>
-        {savedMessage ? <p className="mt-3 text-sm text-slate-700">{savedMessage}</p> : null}
-      </div>
-    </section>
+      <button
+        onClick={handleConnect}
+        disabled={loading}
+        className="mt-8 flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+      >
+        {loading ? (
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+        ) : (
+          <ArrowRight className="h-4 w-4" />
+        )}
+        {loading ? "Bezig..." : "Verbind met Garmin"}
+      </button>
+
+      {error && (
+        <p className="mt-4 rounded-lg bg-rose-50 px-4 py-2 text-xs text-rose-700">{error}</p>
+      )}
+
+      {session.userId && (
+        <p className="mt-6 text-xs text-slate-400">
+          Ingelogd als user {session.userId}
+        </p>
+      )}
+    </div>
   );
 }
