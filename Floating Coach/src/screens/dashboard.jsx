@@ -2,7 +2,7 @@
 const { useEffect: useEffectD, useState: useStateD } = React;
 const FC = window.FC_UTILS;
 
-function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, apiStatus, userId }) {
+function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onNavigate, apiStatus, userId }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
   const activeDate = recoverySnapshot?.calendar_date
@@ -39,6 +39,9 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, 
   const source = (activitiesQuery.source === 'live' && weeklyQuery.source === 'live') ? 'live' : 'demo';
   const ringPct = (recoveryScore / 6);
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
+  const weatherLine = weather?.temperature_c != null
+    ? `${weather.location_name || 'Huidige locatie'} · ${Math.round(weather.temperature_c)}°C ${weather.condition}`
+    : (weather?.source === 'unavailable' ? 'Locatie niet gedeeld' : 'Weer laden…');
 
   // Live HR ticker
   const [hr, setHr] = useStateD(R.currentHeartRate || D.hrStream[D.hrStream.length - 1] || 72);
@@ -85,7 +88,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, 
           <div className="mono" style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-.01em' }}>
             {now.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </div>
-          <div style={{ marginTop: 4 }}>Antwerpen · 14°C bewolkt</div>
+          <div style={{ marginTop: 4 }}>{weatherLine}</div>
         </div>
       </div>
 
@@ -106,7 +109,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, 
       )}
 
       {/* Hero workout card */}
-      <HeroWorkout rec={rec} score={recoveryScore} onNavigate={onNavigate} />
+      <HeroWorkout rec={rec} score={recoveryScore} weather={weather} onNavigate={onNavigate} />
 
       {/* Metric strip */}
       <div className="grid-4">
@@ -127,7 +130,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, 
   );
 }
 
-function HeroWorkout({ rec, score, onNavigate }) {
+function HeroWorkout({ rec, score, weather, onNavigate }) {
   const D = window.FC_DATA;
   const ringPct = (score / 6);
   const ringClass = score <= 2 ? 'bad' : score <= 3 ? 'warn' : '';
@@ -162,6 +165,9 @@ function HeroWorkout({ rec, score, onNavigate }) {
           <p style={{ fontSize: 16, color: 'oklch(78% 0.01 100)', maxWidth: 460,
                       lineHeight: 1.5, margin: '0 0 24px' }}>
             {rec.desc}
+            {weather?.training_note && weather.source !== 'unavailable' && (
+              <><br/><span style={{ color: 'oklch(86% 0.08 125)' }}>Weer: {weather.training_note}.</span></>
+            )}
           </p>
 
           {/* Workout structure mini-strip */}

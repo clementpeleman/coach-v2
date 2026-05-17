@@ -9,6 +9,7 @@ function App() {
   const session = window.useSession();
   const apiStatus = window.useApiStatus();
   const [recoverySnapshot, setRecoverySnapshot] = useStateApp(null);
+  const [weather, setWeather] = useStateApp(null);
   const recoveryMetrics = recoverySnapshot?.metrics || window.FC_DATA.recovery;
   const recoveryScore = recoverySnapshot?.score ?? DEFAULT_RECOVERY;
 
@@ -39,6 +40,25 @@ function App() {
     window.FC_API.fetchGarminRecovery(session.userId).then((snapshot) => {
       if (!cancelled && snapshot?.source === 'live') setRecoverySnapshot(snapshot);
     }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [apiStatus.status, session.userId]);
+
+  // Browser location + live weather. If permission is denied, keep the UI honest.
+  useEffectApp(() => {
+    setWeather(null);
+    if (apiStatus.status !== 'online' || !session.userId || !navigator.geolocation) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        window.FC_API.fetchWeather(pos.coords.latitude, pos.coords.longitude).then((w) => {
+          if (!cancelled) setWeather(w);
+        }).catch(() => {});
+      },
+      () => {
+        if (!cancelled) setWeather({ source: 'unavailable', condition: 'locatie onbekend' });
+      },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 30 * 60 * 1000 },
+    );
     return () => { cancelled = true; };
   }, [apiStatus.status, session.userId]);
 
@@ -84,6 +104,7 @@ function App() {
     recoveryScore,
     recoveryData: recoveryMetrics,
     recoverySnapshot,
+    weather,
     onNavigate: setScreen,
     apiStatus: apiStatus.status,
     userId: session.userId,
@@ -194,6 +215,7 @@ function App() {
       {screen !== 'chat' && (
         <window.CoachOrb recoveryScore={recoveryScore}
                           recoveryData={recoveryMetrics}
+                          weather={weather}
                           onNavigateChat={() => setScreen('chat')}
                           currentScreen={screen}
                           apiStatus={apiStatus.status}

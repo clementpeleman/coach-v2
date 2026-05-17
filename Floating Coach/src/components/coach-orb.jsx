@@ -2,7 +2,7 @@
 const { useState, useEffect, useRef } = React;
 const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
-function CoachOrb({ recoveryScore, recoveryData, onNavigateChat, currentScreen, apiStatus, userId }) {
+function CoachOrb({ recoveryScore, recoveryData, weather, onNavigateChat, currentScreen, apiStatus, userId }) {
   const online = apiStatus === 'online';
   const R = recoveryData || window.FC_DATA.recovery;
   const [open, setOpen] = useState(false);
@@ -43,6 +43,7 @@ function CoachOrb({ recoveryScore, recoveryData, onNavigateChat, currentScreen, 
         const res = await window.FC_API.sendChatMessage({
           userId, message: text,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
+          context: { weather },
         });
         setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);
       } catch (e) {

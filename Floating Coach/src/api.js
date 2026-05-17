@@ -89,6 +89,9 @@
   function fetchGarminImportStatus(userId, periodDays = 30) {
     return getJson(`/garmin/data/import-status?user_id=${userId}&period_days=${periodDays}`);
   }
+  function fetchWeather(lat, lon) {
+    return getJson(`/web/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+  }
 
   // ---- Activities ----
   function fetchGarminActivities(userId, limit = 200, periodDays = 30) {
@@ -107,11 +110,12 @@
   }
 
   // ---- Chat ----
-  function sendChatMessage({ userId, message, history }) {
+  function sendChatMessage({ userId, message, history, context }) {
     return postJson('/web/chat', {
       user_id: userId,
       message,
       history: (history || []).map((m) => ({ role: m.role, content: m.content })),
+      context: context || null,
     });
   }
 
@@ -119,6 +123,7 @@
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
     fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
+    fetchWeather,
     loginWebUser, fetchWebUser,
     sendChatMessage,
   };

@@ -408,6 +408,9 @@ Belangrijke richtlijnen:
 - De data die je ontvangt is al gefilterd en compact
 - Je kunt deze data direct gebruiken in je antwoorden
 - Gebruik de get_current_date tool wanneer gebruikers vragen om data "tot vandaag" of "deze week"
+- Als de gebruikersinput een blok "CONTEXT VOOR COACH" bevat met weer/locatie, gebruik dat in je trainingsadvies.
+- Noem weer alleen wanneer het de training beïnvloedt: hitte, kou, wind, regen/onweer, zichtbaarheid of hydratatie.
+- Pas tempo/intensiteit/routeadvies aan bij slecht weer en leg kort uit waarom.
 
 DYNAMISCHE WORKOUT GENERATOR:
 Workouts worden DYNAMISCH gegenereerd op basis van TYPE en DUUR.

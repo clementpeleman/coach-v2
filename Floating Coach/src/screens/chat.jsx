@@ -2,7 +2,7 @@
 const { useState: useStateC, useEffect: useEffectC, useRef: useRefC } = React;
 const FCU = window.FC_UTILS;
 
-function ChatScreen({ recoveryScore, recoveryData, apiStatus, userId }) {
+function ChatScreen({ recoveryScore, recoveryData, weather, apiStatus, userId }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
   const sleepIntro = R.sleepHours ? ` en je sliep ${R.sleepHours.toFixed(1)}u` : '';
@@ -55,6 +55,7 @@ function ChatScreen({ recoveryScore, recoveryData, apiStatus, userId }) {
           message: t,
           // The backend keeps its own state — we still pass history to seed context.
           history: messages.map((m) => ({ role: m.role, content: m.content })),
+          context: { weather },
         });
         setMessages((m) => [...m, {
           role: 'assistant', content: res.reply,
