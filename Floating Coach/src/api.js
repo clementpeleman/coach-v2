@@ -34,7 +34,12 @@
     });
     if (!r.ok) {
       const t = await r.text();
-      throw new Error(`API ${path} failed (${r.status}): ${t}`);
+      let detail = t;
+      try {
+        const j = JSON.parse(t);
+        if (j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+      } catch (_) {}
+      throw new Error(`API ${path} failed (${r.status}): ${detail}`);
     }
     return r.json();
   }

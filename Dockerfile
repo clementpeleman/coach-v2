@@ -8,5 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Default: API (webapp). Bot: docker compose --profile telegram up -d
+RUN chmod +x scripts/docker-entrypoint.sh
+
+# Default: API. Bot: docker compose --profile telegram up -d
+ENTRYPOINT ["scripts/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

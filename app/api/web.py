@@ -1,4 +1,5 @@
 """Web app endpoints for auth and chat."""
+import logging
 from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 
@@ -13,6 +14,7 @@ from app.database.models import OAuthSession, UserProfile
 from app.tools.garmin_oauth import GarminOAuthService
 
 router = APIRouter(prefix="/web", tags=["web"])
+logger = logging.getLogger(__name__)
 
 
 class WebLoginRequest(BaseModel):
@@ -117,38 +119,57 @@ async def start_direct_garmin_oauth(
     payload: GarminDirectStartRequest, db: Session = Depends(get_db)
 ):
     """Create/reuse a user and return Garmin OAuth URL directly."""
-    if not settings.garmin_redirect_uri:
-        raise HTTPException(status_code=500, detail="GARMIN_REDIRECT_URI not configured")
+    try:
+        if not settings.garmin_redirect_uri:
+            raise HTTPException(
+                status_code=500,
+                detail="GARMIN_REDIRECT_URI is not configured on the server.",
+            )
+        if not settings.garmin_consumer_key or not settings.garmin_consumer_secret:
+            raise HTTPException(
+                status_code=500,
+                detail="GARMIN_CONSUMER_KEY and GARMIN_CONSUMER_SECRET must be set in Coolify env.",
+            )
 
-    user = None
-    if payload.user_id is not None:
-        user = db.query(UserProfile).filter(UserProfile.user_id == payload.user_id).first()
+        user = None
+        if payload.user_id is not None:
+            user = db.query(UserProfile).filter(UserProfile.user_id == payload.user_id).first()
 
-    if not user:
-        user = _create_or_reuse_user(db, email=payload.email, display_name=payload.display_name)
+        if not user:
+            user = _create_or_reuse_user(
+                db, email=payload.email, display_name=payload.display_name
+            )
 
-    oauth_service = GarminOAuthService()
+        oauth_service = GarminOAuthService()
 
-    ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-    db.query(OAuthSession).filter(
-        OAuthSession.created_at < ten_minutes_ago
-    ).delete()
-    db.commit()
+        ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
+        db.query(OAuthSession).filter(OAuthSession.created_at < ten_minutes_ago).delete()
+        db.commit()
 
-    auth_url, code_verifier, state = oauth_service.get_authorization_url(settings.garmin_redirect_uri)
-    oauth_session = OAuthSession(
-        state=state,
-        code_verifier=code_verifier,
-        user_id=user.user_id,
-    )
-    db.add(oauth_session)
-    db.commit()
+        auth_url, code_verifier, state = oauth_service.get_authorization_url(
+            settings.garmin_redirect_uri
+        )
+        oauth_session = OAuthSession(
+            state=state,
+            code_verifier=code_verifier,
+            user_id=user.user_id,
+        )
+        db.add(oauth_session)
+        db.commit()
 
-    return GarminDirectStartResponse(
-        user_id=user.user_id,
-        authorization_url=auth_url,
-        state=state,
-    )
+        return GarminDirectStartResponse(
+            user_id=user.user_id,
+            authorization_url=auth_url,
+            state=state,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Garmin OAuth start failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Garmin OAuth start failed: {exc}",
+        ) from exc
 
 
 @router.get("/auth/me", response_model=WebMeResponse)

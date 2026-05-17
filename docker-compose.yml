@@ -46,7 +46,6 @@ services:
       GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-}
       WEBAPP_URL: ${WEBAPP_URL:-http://localhost:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://coach.peleman.io}
-    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       db:
         condition: service_healthy
@@ -106,9 +105,10 @@ services:
       API_URL: http://app:8000
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SKIP_DB_MIGRATIONS: "1"
     volumes:
       - .:/app
-    command: python chat_interface/telegram_bot.py
+    command: ["python", "chat_interface/telegram_bot.py"]
     depends_on:
       db:
         condition: service_healthy
