@@ -10,6 +10,7 @@ function App() {
   const apiStatus = window.useApiStatus();
   const [recoverySnapshot, setRecoverySnapshot] = useStateApp(null);
   const [weather, setWeather] = useStateApp(null);
+  const [trainingProfile, setTrainingProfile] = useStateApp(null);
   const chatStorageKey = `fc_chat_messages_v1_${session.userId || 'demo'}`;
   const recoveryMetrics = recoverySnapshot?.metrics || window.FC_DATA.recovery;
   const recoveryScore = recoverySnapshot?.score ?? DEFAULT_RECOVERY;
@@ -35,6 +36,17 @@ function App() {
     let cancelled = false;
     window.FC_API.fetchWebUser(session.userId).then((p) => {
       if (!cancelled) setProfile(p);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [apiStatus.status, session.userId]);
+
+  // Shared training profile: personal targets, sport baselines, and learned workout patterns.
+  useEffectApp(() => {
+    setTrainingProfile(null);
+    if (apiStatus.status !== 'online' || !session.userId) return;
+    let cancelled = false;
+    window.FC_API.fetchTrainingProfile(session.userId, 120, 7).then((profileData) => {
+      if (!cancelled) setTrainingProfile(profileData);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [apiStatus.status, session.userId]);
@@ -128,6 +140,7 @@ function App() {
     apiStatus: apiStatus.status,
     userId: session.userId,
     profile,
+    trainingProfile,
     chatMessages,
     setChatMessages,
     chatThinking,
@@ -244,6 +257,7 @@ function App() {
                           currentScreen={screen}
                           apiStatus={apiStatus.status}
                           userId={session.userId}
+                          trainingProfile={trainingProfile}
                           messages={chatMessages}
                           setMessages={setChatMessages}
                           thinking={chatThinking}

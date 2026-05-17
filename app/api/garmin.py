@@ -830,6 +830,250 @@ def build_sport_baselines(activities: list[GarminActivityData], days: int, now: 
     return result
 
 
+def _activity_name_hint(activity: GarminActivityData) -> Optional[str]:
+    """Infer a workout type from user/device activity naming conventions."""
+    name = (activity.activity_name or "").lower()
+    duration_min = (activity.duration or 0) / 60
+    if any(word in name for word in ["sprint", "anaeroob", "anaerobic"]):
+        return "SPRINT"
+    if any(word in name for word in ["vo2", "vo2max", "interval", "intervallen", "800m", "400m"]):
+        return "VO2MAX"
+    if any(word in name for word in ["tempo", "threshold", "drempel", "sweet spot", "sweetspot"]):
+        return "THRESHOLD"
+    if any(word in name for word in ["lsd", "long", "duur", "endurance", "basis"]):
+        return "DUUR"
+    if any(word in name for word in ["easy", "herstel", "recovery", "rustig", "walk", "wandel"]):
+        return "DUUR" if duration_min >= 45 else "HERSTEL"
+    return None
+
+
+def _workout_type_from_effort(effort: str, duration_min: float) -> str:
+    if effort == "vo2":
+        return "VO2MAX"
+    if effort == "threshold":
+        return "THRESHOLD"
+    if duration_min >= 45:
+        return "DUUR"
+    return "HERSTEL"
+
+
+def _format_interval_duration(seconds: float) -> str:
+    if seconds < 90:
+        return f"{max(10, int(round(seconds / 5) * 5))}s"
+    minutes = seconds / 60
+    if minutes < 10:
+        return f"{round(minutes, 1):g}min"
+    return f"{round(minutes)}min"
+
+
+def _activity_interval_structure(segments: list[Dict], sport_max_hr: Optional[int], sport: str) -> Optional[Dict]:
+    """Return interval-like structure detected from detail/lap segments."""
+    if not segments:
+        return None
+    hard_segments = []
+    for segment in segments:
+        metric = _segment_metric(segment, sport)
+        effort = _classify_segment_effort(segment, sport_max_hr, metric, sport)
+        duration = segment.get("duration_seconds") or 0
+        if effort in {"threshold", "vo2"}:
+            hard_segments.append({**segment, "effort": effort, "duration_seconds": duration})
+
+    if len(hard_segments) < 2:
+        return None
+
+    durations = [s["duration_seconds"] for s in hard_segments if s.get("duration_seconds")]
+    median_duration = _median(durations) if durations else None
+    if not median_duration:
+        return None
+
+    count = len(hard_segments)
+    if 10 <= median_duration <= 75:
+        workout_type = "SPRINT"
+    elif 120 <= median_duration <= 360:
+        workout_type = "VO2MAX"
+    else:
+        workout_type = "THRESHOLD"
+
+    return {
+        "type": workout_type,
+        "label": f"{count}x{_format_interval_duration(median_duration)}",
+        "count": count,
+        "median_work_seconds": round(median_duration),
+    }
+
+
+def classify_workout_type(
+    activity: GarminActivityData,
+    segments: list[Dict],
+    sport_max_hr: Optional[int],
+    sport: str,
+) -> Dict:
+    """Classify a historical activity into the app's five workout types."""
+    duration_min = (activity.duration or 0) / 60
+    detail_structure = _activity_interval_structure(segments, sport_max_hr, sport)
+    name_hint = _activity_name_hint(activity)
+
+    if detail_structure:
+        workout_type = detail_structure["type"]
+        source = "activityDetails"
+        structure = detail_structure["label"]
+    elif name_hint:
+        workout_type = name_hint
+        source = "activityName"
+        structure = "continu"
+    else:
+        effort = _classify_effort(activity, sport_max_hr)
+        workout_type = _workout_type_from_effort(effort, duration_min)
+        source = "activitySummary"
+        structure = "continu"
+
+    if name_hint in {"SPRINT", "VO2MAX", "THRESHOLD"} and not detail_structure:
+        workout_type = name_hint
+
+    return {
+        "type": workout_type,
+        "source": source,
+        "structure": structure,
+        "detail_segments": len(segments),
+        "duration_min": round(duration_min),
+    }
+
+
+def _most_common(values: list) -> Optional:
+    if not values:
+        return None
+    counts: Dict = {}
+    for value in values:
+        if value is None:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda item: (-item[1], str(item[0])))[0][0]
+
+
+def _top_days(activities: list[GarminActivityData], limit: int = 3) -> list[str]:
+    counts: Dict[str, int] = {}
+    for activity in activities:
+        if activity.start_time:
+            day = activity.start_time.strftime("%A")
+            counts[day] = counts.get(day, 0) + 1
+    return [day for day, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+
+
+def _confidence(session_count: int, detail_segments: int) -> str:
+    if session_count >= 8 or detail_segments >= 8:
+        return "high"
+    if session_count >= 3 or detail_segments >= 3:
+        return "medium"
+    return "low"
+
+
+def _common_sequence(classified: list[Dict]) -> list[str]:
+    ordered = [item for item in sorted(classified, key=lambda item: item["start_time"] or datetime.min) if item.get("type")]
+    if len(ordered) < 3:
+        return [item["type"] for item in ordered[-3:]]
+    windows: Dict[tuple[str, str, str], int] = {}
+    for index in range(len(ordered) - 2):
+        sequence = tuple(item["type"] for item in ordered[index:index + 3])
+        windows[sequence] = windows.get(sequence, 0) + 1
+    return list(sorted(windows.items(), key=lambda item: (-item[1], item[0]))[0][0])
+
+
+def build_workout_patterns(
+    activities: list[GarminActivityData],
+    details: Optional[list[GarminActivityAuxiliaryData]] = None,
+) -> Dict:
+    """Detect recurring workout types, structures, and weekly rhythm."""
+    detail_index = _build_activity_detail_index(details or [])
+    sport_max_hr: Dict[str, int] = {}
+    for activity in activities:
+        sport = normalize_training_sport(activity)
+        if activity.max_heart_rate:
+            sport_max_hr[sport] = max(sport_max_hr.get(sport, 0), activity.max_heart_rate)
+
+    classified = []
+    for activity in activities:
+        sport = normalize_training_sport(activity)
+        if sport in {"", "UNKNOWN"}:
+            continue
+        detail = _activity_detail_for(activity, detail_index)
+        segments = _segments_from_detail(detail, sport) if detail else []
+        workout = classify_workout_type(activity, segments, sport_max_hr.get(sport), sport)
+        classified.append({
+            **workout,
+            "sport": sport,
+            "activity_id": activity.activity_id,
+            "summary_id": activity.summary_id,
+            "activity_name": activity.activity_name,
+            "start_time": activity.start_time,
+        })
+
+    total = len(classified)
+    type_counts: Dict[str, int] = {}
+    for item in classified:
+        type_counts[item["type"]] = type_counts.get(item["type"], 0) + 1
+
+    dominant_types = [
+        {"type": workout_type, "count": count, "share": round(count / total, 2) if total else 0}
+        for workout_type, count in sorted(type_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+    by_type: Dict[str, Dict] = {}
+    for workout_type in ["HERSTEL", "DUUR", "THRESHOLD", "VO2MAX", "SPRINT"]:
+        items = [item for item in classified if item["type"] == workout_type]
+        if not items:
+            continue
+        item_activities = [
+            activity for activity in activities
+            if any(item["summary_id"] == activity.summary_id for item in items)
+        ]
+        durations = [item["duration_min"] for item in items if item.get("duration_min")]
+        detail_segments = sum(item.get("detail_segments", 0) for item in items)
+        by_type[workout_type] = {
+            "sessions": len(items),
+            "preferred_sport": _most_common([item["sport"] for item in items]),
+            "typical_duration_min": round(_median(durations)) if durations else None,
+            "typical_structure": _most_common([item["structure"] for item in items]) or "continu",
+            "preferred_days": _top_days(item_activities),
+            "confidence": _confidence(len(items), detail_segments),
+            "detail_segments": detail_segments,
+            "sources": {
+                "activityDetails": sum(1 for item in items if item["source"] == "activityDetails"),
+                "activityName": sum(1 for item in items if item["source"] == "activityName"),
+                "activitySummary": sum(1 for item in items if item["source"] == "activitySummary"),
+            },
+        }
+
+    dates = [item["start_time"] for item in classified if item.get("start_time")]
+    span_weeks = 1
+    if len(dates) >= 2:
+        span_weeks = max((max(dates) - min(dates)).days / 7, 1)
+    easy_count = sum(type_counts.get(t, 0) for t in ["HERSTEL", "DUUR"])
+    hard_count = sum(type_counts.get(t, 0) for t in ["THRESHOLD", "VO2MAX", "SPRINT"])
+
+    return {
+        "dominant_types": dominant_types,
+        "by_type": by_type,
+        "weekly_pattern": {
+            "easy_share": round(easy_count / total, 2) if total else None,
+            "hard_sessions_per_week": round(hard_count / span_weeks, 1) if total else 0,
+            "common_sequence": _common_sequence(classified),
+        },
+        "classified_activities": [
+            {
+                "summary_id": item["summary_id"],
+                "activity_name": item["activity_name"],
+                "type": item["type"],
+                "sport": item["sport"],
+                "structure": item["structure"],
+                "source": item["source"],
+            }
+            for item in classified[:20]
+        ],
+    }
+
+
 def parse_min_start_time_from_error(error_message: str) -> Optional[datetime]:
     """Extract Garmin minimum backfill start time from API error text."""
     match = MIN_START_TIME_PATTERN.search(error_message)
@@ -1751,7 +1995,7 @@ async def training_profile(
     current_days: int = Query(7, ge=1, le=30, description="Current load window for sport baselines"),
     db: Session = Depends(get_db),
 ):
-    """Return phase-1 personalized training targets and sport-specific load baselines."""
+    """Return personalized targets, sport-specific load baselines, and workout patterns."""
     try:
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         now = datetime.utcnow()
@@ -1776,12 +2020,14 @@ async def training_profile(
             "generated_at": now.isoformat(),
             "personal_targets": build_personal_training_profile(activities, activity_details),
             "sport_baselines": build_sport_baselines(activities, current_days, now),
+            "workout_patterns": build_workout_patterns(activities, activity_details),
             "method": {
                 "phase": 2,
                 "source": "Garmin activityDetails samples/laps with activity summary fallback",
                 "activity_details": len(activity_details),
                 "notes": [
                     "Targets are learned per sport from detail segments where available.",
+                    "Workout patterns are inferred on demand from details, activity names, and summaries.",
                     "Four-week load comparison is calculated inside the same sport type.",
                     "Activity summaries remain the fallback when details are missing.",
                 ],

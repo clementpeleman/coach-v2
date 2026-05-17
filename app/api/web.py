@@ -363,6 +363,28 @@ async def web_chat(payload: ChatRequest):
                     f"restingHr={metrics.get('restingHr')}, "
                     f"avgStress={metrics.get('avgStress')}."
                 )
+            patterns = payload.context.get("workout_patterns") if isinstance(payload.context, dict) else None
+            if patterns:
+                dominant = patterns.get("dominant_types") or []
+                by_type = patterns.get("by_type") or {}
+                weekly = patterns.get("weekly_pattern") or {}
+                dominant_text = ", ".join(
+                    f"{item.get('type')} {item.get('count')}x"
+                    for item in dominant[:3]
+                    if isinstance(item, dict)
+                )
+                type_text = "; ".join(
+                    f"{key}: {value.get('typical_structure')}, {value.get('typical_duration_min')} min, meestal {value.get('preferred_sport')}"
+                    for key, value in list(by_type.items())[:5]
+                    if isinstance(value, dict)
+                )
+                context_lines.append(
+                    "Persoonlijke workoutpatronen: "
+                    f"dominant={dominant_text or 'onbekend'}; "
+                    f"weekly_easy_share={weekly.get('easy_share')}; "
+                    f"hard_sessions_per_week={weekly.get('hard_sessions_per_week')}; "
+                    f"per_type={type_text or 'onvoldoende data'}."
+                )
             weather = payload.context.get("weather") if isinstance(payload.context, dict) else None
             if weather:
                 context_lines.append(

@@ -1,5 +1,5 @@
 // Workout detail + FIT preview.
-const { useState: useStateW } = React;
+const { useState: useStateW, useEffect: useEffectW } = React;
 const FCUW = window.FC_UTILS;
 
 const SPORT_OPTIONS = [
@@ -10,7 +10,7 @@ const SPORT_OPTIONS = [
   { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo', targetText: 'zwemtempo' },
 ];
 
-function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
+function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingProfile }) {
   const D = window.FC_DATA;
   const online = apiStatus === 'online';
   const activityQuery = window.useLiveData(
@@ -21,24 +21,39 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
   );
   const trainingProfileQuery = window.useLiveData(
     (uid) => window.FC_API.fetchTrainingProfile(uid, 120, 7),
-    { personal_targets: {}, sport_baselines: {}, method: { phase: 1 } },
+    { personal_targets: {}, sport_baselines: {}, workout_patterns: {}, method: { phase: 1 } },
     [],
     { online, userId },
   );
+  const profileData = trainingProfile || trainingProfileQuery.data;
   const latestActivity = activityQuery.data.activities?.[0];
   const deviceName = latestActivity?.raw_data?.deviceName || latestActivity?.device_name || 'Garmin Connect';
   const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
+  const patternForType = profileData.workout_patterns?.by_type?.[rec.type];
+  const patternSport = patternForType?.preferred_sport;
+  const patternSportKey = patternSport && SPORT_OPTIONS.some((sport) => sport.key === patternSport)
+    ? patternSport
+    : null;
+  const plannedDuration = patternForType?.typical_duration_min || rec.duration;
 
   const [sportType, setSportType] = useStateW(sportFromRecommendation(rec.sport));
+  const [sportTouched, setSportTouched] = useStateW(false);
   const [targetMode, setTargetMode] = useStateW('pace');
   const [intensityPct, setIntensityPct] = useStateW(100);
+  useEffectW(() => {
+    if (!sportTouched && patternSportKey) setSportType(patternSportKey);
+  }, [patternSportKey, sportTouched]);
+
   const selectedSport = SPORT_OPTIONS.find((sport) => sport.key === sportType) || SPORT_OPTIONS[1];
-  const personalSportProfile = trainingProfileQuery.data.personal_targets?.[sportType];
+  const personalSportProfile = profileData.personal_targets?.[sportType];
   const personalConfidence = personalSportProfile?.confidence || 'none';
   const detailSegments = personalSportProfile?.detail_segments || 0;
   const primaryTargetLabel = selectedSport.targetLabel;
   const primaryTargetText = selectedSport.targetText;
-  const blocks = buildStructure(rec.type, sportType, personalSportProfile);
+  const baseBlocks = buildStructure(rec.type, sportType, personalSportProfile, patternForType);
+  const blocks = patternForType?.typical_duration_min
+    ? fitBlocksToDuration(baseBlocks, plannedDuration)
+    : baseBlocks;
   const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
   const adjustedBlocks = blocks.map((block) => ({
     ...block,
@@ -66,7 +81,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
               {rec.intensity}
             </span>
           </div>
-          <h1>{rec.dutch}.<br/><em>{rec.duration} minuten.</em></h1>
+          <h1>{rec.dutch}.<br/><em>{Math.round(totalSec / 60)} minuten.</em></h1>
         </div>
         <div className="meta">
           <div className="mono" style={{ fontSize: 11, color: 'var(--ink)' }}>
@@ -104,7 +119,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 5, marginBottom: 14 }}>
               {SPORT_OPTIONS.map((sport) => (
-                <button key={sport.key} onClick={() => setSportType(sport.key)}
+                <button key={sport.key} onClick={() => { setSportTouched(true); setSportType(sport.key); }}
                   className={sportType === sport.key ? 'btn accent' : 'btn ghost'}
                   style={{ justifyContent: 'center', color: sportType === sport.key ? undefined : '#fff',
                     borderColor: sportType === sport.key ? undefined : 'oklch(35% 0.005 100)',
@@ -162,6 +177,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
               {personalSportProfile
                 ? `Persoonlijk profiel · ${personalSportProfile.sessions} sessies · ${detailSegments} detailsegmenten · vertrouwen ${personalConfidence}`
                 : 'Fallback targets · nog te weinig sportdata'}
+              {patternForType && ` · patroon ${patternForType.typical_structure || 'continu'}`}
             </div>
           </div>
 
@@ -214,9 +230,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
 
       {/* 3-col details */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
-        <SmallStat label="Sessie duur" value={`${rec.duration}`} unit="min" />
-        <SmallStat label="Geschatte calorieën" value={`${Math.round(rec.duration * 11)}`} unit="kcal" />
-        <SmallStat label="Verwachte TSS" value={`${Math.round(rec.duration * 0.8)}`} unit="" />
+        <SmallStat label="Sessie duur" value={`${Math.round(totalSec / 60)}`} unit="min" />
+        <SmallStat label="Geschatte calorieën" value={`${Math.round((totalSec / 60) * 11)}`} unit="kcal" />
+        <SmallStat label="Verwachte TSS" value={`${Math.round((totalSec / 60) * 0.8)}`} unit="" />
       </div>
 
       {/* Step list + side */}
@@ -303,6 +319,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
               {personalSportProfile
                 ? ` Targets zijn geleerd uit je laatste ${personalSportProfile.sessions} ${selectedSport.label.toLowerCase()}-sessies${detailSegments ? ` en ${detailSegments} detailsegmenten` : ''}.`
                 : ' Ik gebruik voorlopig ruime standaardtargets tot er meer sessies binnen zijn.'}
+              {patternForType
+                ? ` Structuur gebaseerd op je typische ${rec.type.toLowerCase()}-sessies: ${patternForType.typical_structure || 'continu'}, meestal ${sportLabelFromKey(patternForType.preferred_sport)}.`
+                : ' Voor de workoutstructuur gebruik ik de standaardopbouw omdat er nog weinig patroondata is.'}
               Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>
             <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
@@ -387,6 +406,72 @@ function sportFromRecommendation(sport) {
   return 'RUNNING';
 }
 
+function sportLabelFromKey(key) {
+  return (SPORT_OPTIONS.find((sport) => sport.key === key)?.label || key || 'deze sport').toLowerCase();
+}
+
+function parsePatternStructure(structure) {
+  const text = String(structure || '').toLowerCase();
+  const match = text.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)(min|s)/);
+  if (!match) return null;
+  const count = Number(match[1]);
+  const value = Number(match[2]);
+  const unit = match[3];
+  if (!count || !value) return null;
+  return { count, workSec: unit === 's' ? value : value * 60 };
+}
+
+function fitBlocksToDuration(blocks, durationMin) {
+  const targetSec = Math.max(5, Math.round(durationMin || 0)) * 60;
+  const currentSec = blocks.reduce((sum, block) => sum + block.sec, 0);
+  const diff = targetSec - currentSec;
+  if (!blocks.length || Math.abs(diff) < 60) return blocks;
+  const index = blocks.reduce((best, block, i) => {
+    const currentBest = blocks[best];
+    if (block.zone !== 'Z1' && block.sec > currentBest.sec) return i;
+    if (currentBest.zone === 'Z1' && block.sec > currentBest.sec) return i;
+    return best;
+  }, 0);
+  return blocks.map((block, i) => (
+    i === index ? { ...block, sec: Math.max(60, block.sec + diff) } : block
+  ));
+}
+
+function buildPatternIntervals(type, sportType, personalProfile, pattern, colors) {
+  const parsed = parsePatternStructure(pattern?.typical_structure);
+  if (!parsed || !['THRESHOLD', 'VO2MAX', 'SPRINT'].includes(type)) return null;
+  const settings = {
+    THRESHOLD: { label: 'Tempo blok', short: 'Tempo', zone: 'Z4', metric: 'z4', restSec: 4*60, warmSec: 10*60, coolSec: 8*60, color: colors.z4 },
+    VO2MAX: { label: 'VO2 interval', short: 'VO2', zone: 'Z5', metric: 'z5', restSec: 3*60, warmSec: 10*60, coolSec: 8*60, color: colors.z5 },
+    SPRINT: { label: 'Sprint', short: 'SP', zone: 'Z5', metric: 'z5', restSec: 90, warmSec: 10*60, coolSec: 7*60, color: colors.z5 },
+  }[type];
+  const blocks = [
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: settings.warmSec, hr: '125-138', color: colors.z1 }, sportType, 'z1', personalProfile),
+  ];
+  for (let i = 0; i < parsed.count; i += 1) {
+    blocks.push(withSportTarget({
+      label: `${settings.label} ${i + 1}`,
+      shortLabel: settings.short,
+      zone: settings.zone,
+      sec: parsed.workSec,
+      hr: type === 'THRESHOLD' ? '162-170' : '> 175',
+      color: settings.color,
+    }, sportType, settings.metric, personalProfile));
+    if (i < parsed.count - 1) {
+      blocks.push(withSportTarget({
+        label: 'Herstel',
+        shortLabel: 'rust',
+        zone: 'Z1',
+        sec: settings.restSec,
+        hr: type === 'SPRINT' ? '110-130' : '130-140',
+        color: colors.z1,
+      }, sportType, type === 'SPRINT' ? 'rest' : 'z1', personalProfile));
+    }
+  }
+  blocks.push(withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: settings.coolSec, hr: '120-135', color: colors.z1 }, sportType, 'z1', personalProfile));
+  return blocks;
+}
+
 function metricForSport(sportType, zone) {
   const table = {
     WALKING: {
@@ -454,7 +539,7 @@ function withSportTarget(block, sportType, metricZone, personalProfile) {
   };
 }
 
-function buildStructure(type, sportType = 'RUNNING', personalProfile = null) {
+function buildStructure(type, sportType = 'RUNNING', personalProfile = null, pattern = null) {
   const colors = {
     rest:   'oklch(48% 0.05 220)',
     z1:     'oklch(55% 0.06 220)',
@@ -463,6 +548,9 @@ function buildStructure(type, sportType = 'RUNNING', personalProfile = null) {
     z4:     'oklch(75% 0.18 60)',
     z5:     'oklch(68% 0.22 25)',
   };
+  const patternBlocks = buildPatternIntervals(type, sportType, personalProfile, pattern, colors);
+  if (patternBlocks) return patternBlocks;
+
   if (type === 'HERSTEL') return [
     withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', color: colors.z1 }, sportType, 'z1', personalProfile),
     withSportTarget({ label: sportType === 'WALKING' ? 'Rustige wandeling' : 'Easy blok', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', color: colors.rest }, sportType, 'rest', personalProfile),

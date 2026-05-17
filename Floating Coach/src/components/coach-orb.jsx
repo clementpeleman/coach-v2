@@ -4,7 +4,7 @@ const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
 function CoachOrb({
   recoveryScore, recoveryData, weather, onNavigateChat, currentScreen, apiStatus, userId,
-  messages, setMessages, thinking, setThinking,
+  trainingProfile, messages, setMessages, thinking, setThinking,
 }) {
   const online = apiStatus === 'online';
   const R = recoveryData || window.FC_DATA.recovery;
@@ -51,6 +51,7 @@ function CoachOrb({
               label: recoveryLabel(recoveryScore),
               metrics: R,
             },
+            workout_patterns: trainingProfile?.workout_patterns || null,
           },
         });
         setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);

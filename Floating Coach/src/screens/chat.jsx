@@ -4,7 +4,7 @@ const FCU = window.FC_UTILS;
 
 function ChatScreen({
   recoveryScore, recoveryData, weather, apiStatus, userId,
-  chatMessages, setChatMessages, chatThinking, setChatThinking, resetChat,
+  trainingProfile, chatMessages, setChatMessages, chatThinking, setChatThinking, resetChat,
 }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
@@ -52,6 +52,7 @@ function ChatScreen({
               label: FCU.recoveryLabel(recoveryScore),
               metrics: R,
             },
+            workout_patterns: trainingProfile?.workout_patterns || null,
           },
         });
         setMessages((m) => [...m, {
