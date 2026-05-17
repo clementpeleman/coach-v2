@@ -84,6 +84,7 @@ class GarminActivityData(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(BigInteger, ForeignKey('user_profile.user_id'), nullable=False)
     summary_id = Column(String, unique=True, nullable=False)  # Garmin's unique summary ID
+    summary_type = Column(String, nullable=False, default='activities')  # activities, manuallyUpdatedActivities
     activity_id = Column(String, nullable=True)  # Garmin Connect activity ID
     activity_type = Column(String, nullable=False)  # RUNNING, CYCLING, etc.
     activity_name = Column(String, nullable=True)
@@ -97,6 +98,22 @@ class GarminActivityData(Base):
     device_name = Column(String, nullable=True)
     manual = Column(Boolean, default=False)  # Manually created vs device recorded
     data = Column(Text, nullable=False)  # JSON data of the full summary
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class GarminActivityAuxiliaryData(Base):
+    """Stores non-list activity payloads such as details, files, and MoveIQ events."""
+    __tablename__ = 'garmin_activity_auxiliary_data'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey('user_profile.user_id'), nullable=False)
+    summary_id = Column(String, nullable=False)
+    summary_type = Column(String, nullable=False)  # activityDetails, activityFiles, moveIQActivities
+    activity_id = Column(String, nullable=True)
+    start_time = Column(DateTime, nullable=True)
+    start_time_offset = Column(Integer, nullable=True)
+    duration = Column(Integer, nullable=True)
+    data = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

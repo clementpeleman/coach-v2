@@ -4,10 +4,11 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+import base64
 import json
 
 from app.tools.garmin_oauth import GarminOAuthService
-from app.database.models import GarminHealthData, GarminActivityData
+from app.database.models import GarminActivityAuxiliaryData, GarminHealthData, GarminActivityData
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,19 @@ class GarminAPIClient:
     # Backfill endpoints
     BACKFILL_DAILIES_URL = "https://apis.garmin.com/wellness-api/rest/backfill/dailies"
     BACKFILL_ACTIVITIES_URL = "https://apis.garmin.com/wellness-api/rest/backfill/activities"
+    BACKFILL_ACTIVITY_DETAILS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/activityDetails"
+    BACKFILL_MOVE_IQ_URL = "https://apis.garmin.com/wellness-api/rest/backfill/moveiq"
     BACKFILL_SLEEPS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/sleeps"
+    BACKFILL_EPOCHS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/epochs"
+    BACKFILL_BODY_COMP_URL = "https://apis.garmin.com/wellness-api/rest/backfill/bodyComps"
     BACKFILL_STRESS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/stressDetails"
+    BACKFILL_USER_METRICS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/userMetrics"
+    BACKFILL_PULSE_OX_URL = "https://apis.garmin.com/wellness-api/rest/backfill/pulseOx"
+    BACKFILL_RESPIRATION_URL = "https://apis.garmin.com/wellness-api/rest/backfill/respiration"
+    BACKFILL_HEALTH_SNAPSHOT_URL = "https://apis.garmin.com/wellness-api/rest/backfill/healthSnapshot"
     BACKFILL_HRV_URL = "https://apis.garmin.com/wellness-api/rest/backfill/hrv"
+    BACKFILL_BLOOD_PRESSURE_URL = "https://apis.garmin.com/wellness-api/rest/backfill/bloodPressures"
+    BACKFILL_SKIN_TEMP_URL = "https://apis.garmin.com/wellness-api/rest/backfill/skinTemp"
 
     def __init__(self, db: Session, user_id: int):
         """
@@ -149,14 +160,20 @@ class GarminAPIClient:
 
     def _store_activity_data(
         self,
-        summaries: List[Dict]
+        summaries: List[Dict],
+        summary_type: str = "activities",
     ):
         """
         Store activity data summaries in database.
 
         Args:
             summaries: List of activity summary dicts
+            summary_type: Garmin summary type from webhook payload
         """
+        if summary_type not in {"activities", "manuallyUpdatedActivities"}:
+            self._store_activity_auxiliary_data(summary_type, summaries)
+            return
+
         for summary in summaries:
             summary_id = summary.get('summaryId')
             if not summary_id:
@@ -174,6 +191,7 @@ class GarminAPIClient:
 
             if existing:
                 # Update existing record
+                existing.summary_type = summary_type
                 existing.data = data_json
                 existing.updated_at = datetime.utcnow()
             else:
@@ -181,6 +199,7 @@ class GarminAPIClient:
                 activity_data = GarminActivityData(
                     user_id=self.user_id,
                     summary_id=summary_id,
+                    summary_type=summary_type,
                     activity_id=summary.get('activityId'),
                     activity_type=summary.get('activityType'),
                     activity_name=summary.get('activityName'),
@@ -198,6 +217,69 @@ class GarminAPIClient:
                 self.db.add(activity_data)
 
         self.db.commit()
+
+    def _store_activity_auxiliary_data(
+        self,
+        summary_type: str,
+        summaries: List[Dict],
+    ):
+        """Store activity details, files, MoveIQ, and other non-list activity payloads."""
+        for summary in summaries:
+            summary_id = (
+                summary.get('summaryId')
+                or summary.get('activityId')
+                or summary.get('fileId')
+                or summary.get('callbackURL')
+            )
+            if not summary_id:
+                logger.warning(f"No stable identifier found in {summary_type} summary")
+                continue
+
+            existing = self.db.query(GarminActivityAuxiliaryData).filter(
+                GarminActivityAuxiliaryData.summary_type == summary_type,
+                GarminActivityAuxiliaryData.summary_id == str(summary_id),
+            ).first()
+
+            start_time = None
+            if 'startTimeInSeconds' in summary:
+                start_time = datetime.utcfromtimestamp(summary['startTimeInSeconds'])
+
+            data_json = json.dumps(summary)
+
+            if existing:
+                existing.activity_id = summary.get('activityId')
+                existing.start_time = start_time
+                existing.start_time_offset = summary.get('startTimeOffsetInSeconds')
+                existing.duration = summary.get('durationInSeconds')
+                existing.data = data_json
+                existing.updated_at = datetime.utcnow()
+            else:
+                aux_data = GarminActivityAuxiliaryData(
+                    user_id=self.user_id,
+                    summary_id=str(summary_id),
+                    summary_type=summary_type,
+                    activity_id=summary.get('activityId'),
+                    start_time=start_time,
+                    start_time_offset=summary.get('startTimeOffsetInSeconds'),
+                    duration=summary.get('durationInSeconds'),
+                    data=data_json,
+                )
+                self.db.add(aux_data)
+
+        self.db.commit()
+
+    def _store_activity_file_content(
+        self,
+        metadata: Dict,
+        content: bytes,
+        content_type: Optional[str] = None,
+    ):
+        """Store activity file metadata plus raw callback content as base64."""
+        payload = dict(metadata)
+        payload["contentType"] = content_type
+        payload["contentLength"] = len(content)
+        payload["contentBase64"] = base64.b64encode(content).decode("ascii")
+        self._store_activity_auxiliary_data("activityFiles", [payload])
 
     # =========================================================================
     # HEALTH DATA METHODS
@@ -382,7 +464,7 @@ class GarminAPIClient:
         data = self._make_request(self.ACTIVITIES_URL, params)
 
         if store:
-            self._store_activity_data(data)
+            self._store_activity_data(data, "activities")
 
         return data
 
@@ -411,13 +493,7 @@ class GarminAPIClient:
         data = self._make_request(self.ACTIVITY_DETAILS_URL, params)
 
         if store:
-            # Activity details have nested structure
-            for item in data:
-                if 'summary' in item:
-                    # Extract summary and add summaryId from parent
-                    summary = item['summary']
-                    summary['summaryId'] = item.get('summaryId')
-                    self._store_activity_data([summary])
+            self._store_activity_auxiliary_data("activityDetails", data)
 
         return data
 
@@ -485,6 +561,37 @@ class GarminAPIClient:
         else:
             raise Exception(f"Backfill request failed: {response.text}")
 
+    def backfill_activity_type(
+        self,
+        data_type: str,
+        start_date: datetime,
+        end_date: datetime
+    ):
+        """Request backfill for supported Activity API summary types."""
+        urls = {
+            "activityDetails": self.BACKFILL_ACTIVITY_DETAILS_URL,
+            "moveIQActivities": self.BACKFILL_MOVE_IQ_URL,
+        }
+        url = urls.get(data_type)
+        if not url:
+            raise ValueError(f"Unsupported activity backfill type: {data_type}")
+
+        params = {
+            "summaryStartTimeInSeconds": int(start_date.timestamp()),
+            "summaryEndTimeInSeconds": int(end_date.timestamp())
+        }
+
+        response = requests.get(
+            url,
+            headers=self._get_headers(),
+            params=params
+        )
+
+        if response.status_code == 202:
+            logger.info(f"Backfill requested for {data_type}: {start_date} to {end_date}")
+        else:
+            raise Exception(f"Backfill request failed for {data_type}: {response.text}")
+
     def backfill_health_type(
         self,
         data_type: str,
@@ -497,9 +604,17 @@ class GarminAPIClient:
         Data arrives asynchronously via configured Garmin webhooks.
         """
         urls = {
+            "epochs": self.BACKFILL_EPOCHS_URL,
             "sleeps": self.BACKFILL_SLEEPS_URL,
+            "bodyComps": self.BACKFILL_BODY_COMP_URL,
             "stressDetails": self.BACKFILL_STRESS_URL,
+            "userMetrics": self.BACKFILL_USER_METRICS_URL,
+            "pulseOx": self.BACKFILL_PULSE_OX_URL,
+            "respiration": self.BACKFILL_RESPIRATION_URL,
+            "healthSnapshot": self.BACKFILL_HEALTH_SNAPSHOT_URL,
             "hrv": self.BACKFILL_HRV_URL,
+            "bloodPressures": self.BACKFILL_BLOOD_PRESSURE_URL,
+            "skinTemp": self.BACKFILL_SKIN_TEMP_URL,
         }
         url = urls.get(data_type)
         if not url:

@@ -1,5 +1,6 @@
 """Garmin OAuth2 and webhook API endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import Dict, Optional
 import logging
@@ -13,12 +14,35 @@ from app.config import settings
 from app.database.database import get_db
 from app.tools.garmin_oauth import GarminOAuthService
 from app.tools.garmin_client import GarminAPIClient
-from app.database.models import GarminActivityData, GarminHealthData, GarminToken, OAuthSession
+from app.database.models import (
+    GarminActivityAuxiliaryData,
+    GarminActivityData,
+    GarminHealthData,
+    GarminToken,
+    OAuthSession,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/garmin", tags=["garmin"])
 MIN_START_TIME_PATTERN = re.compile(r"before min start time of ([0-9T:\.\-]+Z)")
+ACTIVITY_BACKFILL_WINDOW_DAYS = 30
+HEALTH_BACKFILL_WINDOW_DAYS = 90
+DEFAULT_ACTIVITY_BACKFILL_TYPES = ["activities", "activityDetails", "moveIQActivities"]
+DEFAULT_HEALTH_BACKFILL_TYPES = [
+    "dailies",
+    "epochs",
+    "sleeps",
+    "bodyComps",
+    "stressDetails",
+    "userMetrics",
+    "pulseOx",
+    "respiration",
+    "healthSnapshot",
+    "hrv",
+    "bloodPressures",
+    "skinTemp",
+]
 
 
 def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> int:
@@ -82,6 +106,26 @@ def parse_min_start_time_from_error(error_message: str) -> Optional[datetime]:
         return None
 
 
+def is_duplicate_backfill_error(error_message: str) -> bool:
+    """Return true when Garmin rejects a request because that window was already requested."""
+    return "duplicate" in error_message.lower() and "backfill" in error_message.lower()
+
+
+def split_backfill_windows(start: datetime, end: datetime, window_days: int) -> list[tuple[datetime, datetime]]:
+    """Split a backfill range into Garmin-compliant windows."""
+    if start >= end:
+        return []
+
+    windows = []
+    cursor = start
+    max_delta = timedelta(days=window_days)
+    while cursor < end:
+        window_end = min(cursor + max_delta, end)
+        windows.append((cursor, window_end))
+        cursor = window_end + timedelta(seconds=1)
+    return windows
+
+
 def request_activity_backfill_with_fallback(
     client: GarminAPIClient,
     start: datetime,
@@ -102,7 +146,7 @@ def request_activity_backfill_with_fallback(
     except Exception as exc:
         error_text = str(exc)
 
-        if "duplicate backfill processed" in error_text:
+        if is_duplicate_backfill_error(error_text):
             result["status"] = "duplicate"
             result["notes"].append("Garmin reported this range was already processed.")
             return result
@@ -127,11 +171,91 @@ def request_activity_backfill_with_fallback(
             return result
         except Exception as second_exc:
             second_error_text = str(second_exc)
-            if "duplicate backfill processed" in second_error_text:
+            if is_duplicate_backfill_error(second_error_text):
                 result["status"] = "duplicate"
                 result["notes"].append("Garmin reported this adjusted range was already processed.")
                 return result
             raise
+
+
+def request_activity_backfill_range(
+    client: GarminAPIClient,
+    start: datetime,
+    end: datetime,
+    data_type: str = "activities",
+) -> list[Dict]:
+    """Request activity backfill in 30-day Garmin-compliant windows."""
+    results = []
+    for window_start, window_end in split_backfill_windows(start, end, ACTIVITY_BACKFILL_WINDOW_DAYS):
+        try:
+            if data_type == "activities":
+                results.append(
+                    request_activity_backfill_with_fallback(
+                        client=client,
+                        start=window_start,
+                        end=window_end,
+                    )
+                )
+            else:
+                client.backfill_activity_type(data_type, window_start, window_end)
+                results.append(
+                    {
+                        "requested_start": window_start.isoformat(),
+                        "effective_start": window_start.isoformat(),
+                        "end": window_end.isoformat(),
+                        "status": "requested",
+                        "notes": [],
+                    }
+                )
+        except Exception as exc:
+            error_text = str(exc)
+            results.append(
+                {
+                    "requested_start": window_start.isoformat(),
+                    "effective_start": window_start.isoformat(),
+                    "end": window_end.isoformat(),
+                    "status": "duplicate" if is_duplicate_backfill_error(error_text) else "error",
+                    "notes": [
+                        "Garmin reported this range was already processed."
+                        if is_duplicate_backfill_error(error_text)
+                        else error_text
+                    ],
+                }
+            )
+    return results
+
+
+def request_health_backfill_range(
+    client: GarminAPIClient,
+    data_type: str,
+    start: datetime,
+    end: datetime,
+) -> list[Dict]:
+    """Request health backfill in 90-day Garmin-compliant windows."""
+    results = []
+    for window_start, window_end in split_backfill_windows(start, end, HEALTH_BACKFILL_WINDOW_DAYS):
+        result = {
+            "type": data_type,
+            "requested_start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+            "status": "requested",
+            "notes": [],
+        }
+        try:
+            if data_type == "dailies":
+                client.backfill_dailies(window_start, window_end)
+            else:
+                client.backfill_health_type(data_type, window_start, window_end)
+        except Exception as exc:
+            error_text = str(exc)
+            if is_duplicate_backfill_error(error_text):
+                result["status"] = "duplicate"
+                result["notes"].append("Garmin reported this range was already processed.")
+            else:
+                result["status"] = "error"
+                result["notes"].append(error_text)
+        results.append(result)
+    return results
 
 
 def build_weekly_activity_trend(activities: list[GarminActivityData]) -> list[Dict]:
@@ -418,17 +542,18 @@ async def oauth_callback(
             client = GarminAPIClient(db, user_id)
             backfill_end = datetime.utcnow()
             backfill_start = backfill_end - timedelta(days=120)
-            client.backfill_dailies(backfill_start, backfill_end)
-            backfill_result = request_activity_backfill_with_fallback(
-                client=client,
-                start=backfill_start,
-                end=backfill_end,
-            )
-            for health_type in ["sleeps", "stressDetails", "hrv"]:
-                client.backfill_health_type(health_type, backfill_start, backfill_end)
-            logger.info(f"Initial activity backfill requested after OAuth: {backfill_result}")
+            backfill_result = {}
+            for activity_type in DEFAULT_ACTIVITY_BACKFILL_TYPES:
+                backfill_result[activity_type] = request_activity_backfill_range(
+                    client, backfill_start, backfill_end, activity_type
+                )
+            for health_type in DEFAULT_HEALTH_BACKFILL_TYPES:
+                backfill_result[health_type] = request_health_backfill_range(
+                    client, health_type, backfill_start, backfill_end
+                )
+            logger.info(f"Initial Garmin backfill requested after OAuth: {backfill_result}")
         except Exception as backfill_exc:
-            logger.warning(f"Initial activity backfill after OAuth failed: {backfill_exc}")
+            logger.warning(f"Initial Garmin backfill after OAuth failed: {backfill_exc}")
 
         # Redirect the user back to the web app after successful OAuth.
         from fastapi.responses import HTMLResponse
@@ -590,6 +715,7 @@ async def list_activities(
         start_date = datetime.utcnow() - timedelta(days=period_days)
         activities = db.query(GarminActivityData).filter(
             GarminActivityData.user_id == resolved_user_id,
+            GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
             GarminActivityData.start_time >= start_date
         ).order_by(GarminActivityData.start_time.desc()).limit(limit).all()
 
@@ -606,6 +732,7 @@ async def list_activities(
                 {
                     "id": activity.id,
                     "summary_id": activity.summary_id,
+                    "summary_type": activity.summary_type,
                     "activity_id": activity.activity_id,
                     "activity_type": activity.activity_type,
                     "activity_name": activity.activity_name,
@@ -631,6 +758,57 @@ async def list_activities(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/data/import-status")
+async def garmin_import_status(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    period_days: int = Query(30, ge=1, le=365, description="Number of days to inspect"),
+    db: Session = Depends(get_db),
+):
+    """Return stored Garmin record counts by summary type for import diagnostics."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        start_date = datetime.utcnow() - timedelta(days=period_days)
+
+        activity_counts = dict(
+            db.query(GarminActivityData.summary_type, func.count(GarminActivityData.id))
+            .filter(
+                GarminActivityData.user_id == resolved_user_id,
+                GarminActivityData.start_time >= start_date,
+            )
+            .group_by(GarminActivityData.summary_type)
+            .all()
+        )
+        auxiliary_counts = dict(
+            db.query(GarminActivityAuxiliaryData.summary_type, func.count(GarminActivityAuxiliaryData.id))
+            .filter(
+                GarminActivityAuxiliaryData.user_id == resolved_user_id,
+                GarminActivityAuxiliaryData.start_time >= start_date,
+            )
+            .group_by(GarminActivityAuxiliaryData.summary_type)
+            .all()
+        )
+        health_counts = dict(
+            db.query(GarminHealthData.summary_type, func.count(GarminHealthData.id))
+            .filter(
+                GarminHealthData.user_id == resolved_user_id,
+                GarminHealthData.start_time >= start_date,
+            )
+            .group_by(GarminHealthData.summary_type)
+            .all()
+        )
+
+        return {
+            "period_days": period_days,
+            "activity": activity_counts,
+            "activity_auxiliary": auxiliary_counts,
+            "health": health_counts,
+        }
+    except Exception as e:
+        logger.error(f"Import status failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/analysis/weekly")
 async def weekly_analysis(
     user_id: Optional[int] = Query(None, description="Internal user ID"),
@@ -647,6 +825,7 @@ async def weekly_analysis(
 
         activities = db.query(GarminActivityData).filter(
             GarminActivityData.user_id == resolved_user_id,
+            GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
             GarminActivityData.start_time >= baseline_start
         ).order_by(GarminActivityData.start_time.desc()).all()
 
@@ -845,7 +1024,7 @@ async def request_backfill(
     telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
-    data_type: str = Query(..., description="Type of data", regex="^(dailies|activities|sleeps|stress|hrv|health|both|all)$"),
+    data_type: str = Query(..., description="Type of data to backfill, e.g. activities, activityDetails, health, all"),
     db: Session = Depends(get_db)
 ):
     """
@@ -861,33 +1040,52 @@ async def request_backfill(
 
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         client = GarminAPIClient(db, resolved_user_id)
+        normalized_type = {
+            "stress": "stressDetails",
+            "bodyCompositions": "bodyComps",
+            "bodyComposition": "bodyComps",
+            "pulseox": "pulseOx",
+            "bloodPressure": "bloodPressures",
+            "skinTemperature": "skinTemp",
+            "moveiq": "moveIQActivities",
+            "moveIQ": "moveIQActivities",
+        }.get(data_type, data_type)
 
-        if data_type in ["dailies", "health", "both", "all"]:
-            client.backfill_dailies(start, end)
-
-        activity_backfill = None
-        if data_type in ["activities", "both", "all"]:
-            activity_backfill = request_activity_backfill_with_fallback(
-                client=client,
-                start=start,
-                end=end,
-            )
-
+        health_backfill: Dict[str, list[Dict]] = {}
         health_types = []
-        if data_type in ["sleeps", "health", "both", "all"]:
-            health_types.append("sleeps")
-        if data_type in ["stress", "health", "both", "all"]:
-            health_types.append("stressDetails")
-        if data_type in ["hrv", "health", "both", "all"]:
-            health_types.append("hrv")
+        if normalized_type in ["health", "both", "all"]:
+            health_types = DEFAULT_HEALTH_BACKFILL_TYPES.copy()
+        elif normalized_type in DEFAULT_HEALTH_BACKFILL_TYPES:
+            health_types = [normalized_type]
+
+        activity_backfill: Dict[str, list[Dict]] = {}
+        activity_types = []
+        if normalized_type in ["activity", "both", "all"]:
+            activity_types = DEFAULT_ACTIVITY_BACKFILL_TYPES.copy()
+        elif normalized_type in DEFAULT_ACTIVITY_BACKFILL_TYPES:
+            activity_types = [normalized_type]
 
         for health_type in health_types:
-            client.backfill_health_type(health_type, start, end)
+            health_backfill[health_type] = request_health_backfill_range(client, health_type, start, end)
+        for activity_type in activity_types:
+            activity_backfill[activity_type] = request_activity_backfill_range(
+                client, start, end, activity_type
+            )
+
+        if not health_backfill and not activity_backfill:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unsupported data_type. Use all, both, health, activity, activities, "
+                    "activityDetails, moveIQActivities, or a Health API type such as hrv."
+                ),
+            )
 
         return {
             "status": "success",
             "message": f"Backfill requested for {data_type} from {start_date} to {end_date}. Data will be sent via webhooks.",
             "activity_backfill": activity_backfill,
+            "health_backfill": health_backfill,
         }
 
     except Exception as e:
@@ -909,11 +1107,10 @@ async def request_smart_activity_backfill(
 
         end = datetime.utcnow()
         start = end - timedelta(days=days)
-        activity_backfill = request_activity_backfill_with_fallback(
-            client=client,
-            start=start,
-            end=end,
-        )
+        activity_backfill = {
+            activity_type: request_activity_backfill_range(client, start, end, activity_type)
+            for activity_type in DEFAULT_ACTIVITY_BACKFILL_TYPES
+        }
 
         return {
             "status": "success",
@@ -1039,7 +1236,7 @@ async def receive_activity_webhook(
                     # Store PUSH activity data directly
                     try:
                         client = GarminAPIClient(db, user_id)
-                        client._store_activity_data([item])
+                        client._store_activity_data([item], summary_type)
                         logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
                         logger.error(f"Failed to store PUSH activity: {e}")
@@ -1051,6 +1248,24 @@ async def receive_activity_webhook(
                 try:
                     # Fetch data from callback URL using user's access token
                     client = GarminAPIClient(db, user_id)
+                    if summary_type == "activityFiles":
+                        # File pings contain useful metadata in the ping itself, then binary content at callbackURL.
+                        client._store_activity_auxiliary_data(summary_type, [item])
+                        file_response = requests.get(
+                            callback_url,
+                            headers=client._get_headers()
+                        )
+                        if file_response.status_code == 200:
+                            client._store_activity_file_content(
+                                metadata=item,
+                                content=file_response.content,
+                                content_type=file_response.headers.get("content-type"),
+                            )
+                            logger.info(f"Stored activity file {item.get('summaryId')} for user {user_id}")
+                        else:
+                            logger.error(f"Activity file callback returned {file_response.status_code}: {file_response.text}")
+                        continue
+
                     response = requests.get(
                         callback_url,
                         headers=client._get_headers()
@@ -1061,7 +1276,7 @@ async def receive_activity_webhook(
                         logger.info(f"Fetched {len(summaries)} {summary_type} summaries from PING")
 
                         # Store in database
-                        client._store_activity_data(summaries)
+                        client._store_activity_data(summaries, summary_type)
                         logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
                         logger.error(f"Callback URL returned {response.status_code}: {response.text}")

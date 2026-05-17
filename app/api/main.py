@@ -34,6 +34,8 @@ def read_root():
             "garmin_auth_status": "/garmin/auth/status",
             "garmin_disconnect": "/garmin/auth/disconnect",
             "garmin_activities": "/garmin/activities",
+            "garmin_import_status": "/garmin/data/import-status",
+            "garmin_backfill": "/garmin/data/backfill",
             "garmin_weekly_analysis": "/garmin/analysis/weekly",
             "garmin_recovery": "/garmin/recovery",
             "web_login": "/web/auth/login",
