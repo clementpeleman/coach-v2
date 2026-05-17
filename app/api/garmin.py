@@ -115,6 +115,144 @@ def request_initial_backfill(
     return result
 
 
+def build_garmin_capabilities(permissions_response) -> Dict:
+    """Expose the Garmin permissions as actionable app capabilities."""
+    permissions = extract_permission_names(permissions_response)
+    missing_initial = sorted(
+        permission for permission in REQUIRED_EXPORT_PERMISSIONS if permission not in permissions
+    )
+    capabilities = {
+        "activity_export": "ACTIVITY_EXPORT" in permissions,
+        "historical_data_export": "HISTORICAL_DATA_EXPORT" in permissions,
+        "health_export": "HEALTH_EXPORT" in permissions,
+        "workout_import": "WORKOUT_IMPORT" in permissions,
+        "course_import": "COURSE_IMPORT" in permissions,
+    }
+    return {
+        "permissions": sorted(permissions),
+        "capabilities": capabilities,
+        "missing_required_for_initial_import": missing_initial,
+        "ready_for_initial_import": not missing_initial,
+    }
+
+
+def build_import_status_payload(db: Session, user_id: int, period_days: int) -> Dict:
+    """Return stored Garmin import counts and onboarding-friendly readiness signals."""
+    start_date = datetime.utcnow() - timedelta(days=period_days)
+
+    activity_counts = dict(
+        db.query(GarminActivityData.summary_type, func.count(GarminActivityData.id))
+        .filter(
+            GarminActivityData.user_id == user_id,
+            GarminActivityData.start_time >= start_date,
+        )
+        .group_by(GarminActivityData.summary_type)
+        .all()
+    )
+    auxiliary_counts = dict(
+        db.query(GarminActivityAuxiliaryData.summary_type, func.count(GarminActivityAuxiliaryData.id))
+        .filter(
+            GarminActivityAuxiliaryData.user_id == user_id,
+            GarminActivityAuxiliaryData.start_time >= start_date,
+        )
+        .group_by(GarminActivityAuxiliaryData.summary_type)
+        .all()
+    )
+    health_counts = dict(
+        db.query(GarminHealthData.summary_type, func.count(GarminHealthData.id))
+        .filter(
+            GarminHealthData.user_id == user_id,
+            GarminHealthData.start_time >= start_date,
+        )
+        .group_by(GarminHealthData.summary_type)
+        .all()
+    )
+    webhook_counts = dict(
+        db.query(GarminWebhookEvent.source, func.count(GarminWebhookEvent.id))
+        .filter(
+            GarminWebhookEvent.user_id == user_id,
+            GarminWebhookEvent.created_at >= start_date,
+        )
+        .group_by(GarminWebhookEvent.source)
+        .all()
+    )
+    webhook_status_counts = {
+        f"{source}:{status}": count
+        for source, status, count in (
+            db.query(
+                GarminWebhookEvent.source,
+                GarminWebhookEvent.status,
+                func.count(GarminWebhookEvent.id),
+            )
+            .filter(
+                GarminWebhookEvent.user_id == user_id,
+                GarminWebhookEvent.created_at >= start_date,
+            )
+            .group_by(GarminWebhookEvent.source, GarminWebhookEvent.status)
+            .all()
+        )
+    }
+    recent_webhooks = [
+        {
+            "id": event.id,
+            "source": event.source,
+            "summary_types": json.loads(event.summary_types or "[]"),
+            "item_count": event.item_count,
+            "callback_count": event.callback_count,
+            "status": event.status,
+            "error": event.error,
+            "created_at": event.created_at.isoformat() if event.created_at else None,
+        }
+        for event in (
+            db.query(GarminWebhookEvent)
+            .filter(
+                or_(
+                    GarminWebhookEvent.user_id == user_id,
+                    GarminWebhookEvent.user_id.is_(None),
+                ),
+                GarminWebhookEvent.created_at >= start_date,
+            )
+            .order_by(GarminWebhookEvent.created_at.desc())
+            .limit(20)
+            .all()
+        )
+    ]
+
+    activity_total = sum(activity_counts.values())
+    auxiliary_total = sum(auxiliary_counts.values())
+    health_total = sum(health_counts.values())
+    webhook_total = sum(webhook_counts.values())
+    has_activity_webhook = webhook_counts.get("activity", 0) > 0
+    has_health_webhook = webhook_counts.get("health", 0) > 0
+
+    return {
+        "period_days": period_days,
+        "activity": activity_counts,
+        "activity_auxiliary": auxiliary_counts,
+        "health": health_counts,
+        "summary": {
+            "activity_records": activity_total,
+            "activity_sessions": activity_counts.get("activities", 0)
+            + activity_counts.get("manuallyUpdatedActivities", 0),
+            "activity_auxiliary_records": auxiliary_total,
+            "activity_files": auxiliary_counts.get("activityFiles", 0),
+            "health_records": health_total,
+            "health_types": sorted(health_counts.keys()),
+            "webhook_events": webhook_total,
+            "has_activity_webhook": has_activity_webhook,
+            "has_health_webhook": has_health_webhook,
+            "activity_import_ready": activity_total > 0 and has_activity_webhook,
+            "health_import_ready": health_total > 0 and has_health_webhook,
+            "onboarding_ready": activity_total > 0 and health_total > 0,
+        },
+        "webhooks": {
+            "counts": webhook_counts,
+            "status_counts": webhook_status_counts,
+            "recent": recent_webhooks,
+        },
+    }
+
+
 def _create_webhook_event(db: Session, source: str, payload: Dict) -> GarminWebhookEvent:
     """Persist the raw Garmin webhook payload before processing it."""
     summary_types = list(payload.keys())
@@ -723,16 +861,43 @@ async def check_auth_status(
 
         # Get user permissions
         permissions = oauth_service.get_user_permissions(access_token)
+        garmin_access = build_garmin_capabilities(permissions)
 
         # Get token info
         garmin_token = db.query(GarminToken).filter(
             GarminToken.user_id == resolved_user_id
         ).first()
+        import_status = build_import_status_payload(db, resolved_user_id, 30)
 
         return {
             "authenticated": True,
             "garmin_user_id": garmin_token.garmin_user_id,
-            "permissions": permissions,
+            "permissions": garmin_access["permissions"],
+            "permission_response": permissions,
+            "capabilities": garmin_access["capabilities"],
+            "missing_required_for_initial_import": garmin_access["missing_required_for_initial_import"],
+            "ready_for_initial_import": garmin_access["ready_for_initial_import"],
+            "initial_import_policy": {
+                "activity_days": INITIAL_ACTIVITY_BACKFILL_DAYS,
+                "health_days": INITIAL_HEALTH_BACKFILL_DAYS,
+                "activity_types": CORE_ACTIVITY_BACKFILL_TYPES,
+                "health_types": CORE_HEALTH_BACKFILL_TYPES,
+            },
+            "import_status": {
+                "period_days": import_status["period_days"],
+                "summary": import_status["summary"],
+            },
+            "onboarding": {
+                "connected": True,
+                "ready": import_status["summary"]["onboarding_ready"],
+                "activity_import_ready": import_status["summary"]["activity_import_ready"],
+                "health_import_ready": import_status["summary"]["health_import_ready"],
+                "message": (
+                    "Garmin is gekoppeld en de eerste activity/health data is binnen."
+                    if import_status["summary"]["onboarding_ready"]
+                    else "Garmin is gekoppeld. Eerste import loopt via webhooks na sync/backfill."
+                ),
+            },
             "expires_at": garmin_token.expires_at.isoformat()
         }
 
@@ -874,97 +1039,7 @@ async def garmin_import_status(
     """Return stored Garmin record counts by summary type for import diagnostics."""
     try:
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
-        start_date = datetime.utcnow() - timedelta(days=period_days)
-
-        activity_counts = dict(
-            db.query(GarminActivityData.summary_type, func.count(GarminActivityData.id))
-            .filter(
-                GarminActivityData.user_id == resolved_user_id,
-                GarminActivityData.start_time >= start_date,
-            )
-            .group_by(GarminActivityData.summary_type)
-            .all()
-        )
-        auxiliary_counts = dict(
-            db.query(GarminActivityAuxiliaryData.summary_type, func.count(GarminActivityAuxiliaryData.id))
-            .filter(
-                GarminActivityAuxiliaryData.user_id == resolved_user_id,
-                GarminActivityAuxiliaryData.start_time >= start_date,
-            )
-            .group_by(GarminActivityAuxiliaryData.summary_type)
-            .all()
-        )
-        health_counts = dict(
-            db.query(GarminHealthData.summary_type, func.count(GarminHealthData.id))
-            .filter(
-                GarminHealthData.user_id == resolved_user_id,
-                GarminHealthData.start_time >= start_date,
-            )
-            .group_by(GarminHealthData.summary_type)
-            .all()
-        )
-        webhook_counts = dict(
-            db.query(GarminWebhookEvent.source, func.count(GarminWebhookEvent.id))
-            .filter(
-                GarminWebhookEvent.user_id == resolved_user_id,
-                GarminWebhookEvent.created_at >= start_date,
-            )
-            .group_by(GarminWebhookEvent.source)
-            .all()
-        )
-        webhook_status_counts = {
-            f"{source}:{status}": count
-            for source, status, count in (
-                db.query(
-                    GarminWebhookEvent.source,
-                    GarminWebhookEvent.status,
-                    func.count(GarminWebhookEvent.id),
-                )
-                .filter(
-                    GarminWebhookEvent.user_id == resolved_user_id,
-                    GarminWebhookEvent.created_at >= start_date,
-                )
-                .group_by(GarminWebhookEvent.source, GarminWebhookEvent.status)
-                .all()
-            )
-        }
-        recent_webhooks = [
-            {
-                "id": event.id,
-                "source": event.source,
-                "summary_types": json.loads(event.summary_types or "[]"),
-                "item_count": event.item_count,
-                "callback_count": event.callback_count,
-                "status": event.status,
-                "error": event.error,
-                "created_at": event.created_at.isoformat() if event.created_at else None,
-            }
-            for event in (
-                db.query(GarminWebhookEvent)
-                .filter(
-                    or_(
-                        GarminWebhookEvent.user_id == resolved_user_id,
-                        GarminWebhookEvent.user_id.is_(None),
-                    ),
-                    GarminWebhookEvent.created_at >= start_date,
-                )
-                .order_by(GarminWebhookEvent.created_at.desc())
-                .limit(20)
-                .all()
-            )
-        ]
-
-        return {
-            "period_days": period_days,
-            "activity": activity_counts,
-            "activity_auxiliary": auxiliary_counts,
-            "health": health_counts,
-            "webhooks": {
-                "counts": webhook_counts,
-                "status_counts": webhook_status_counts,
-                "recent": recent_webhooks,
-            },
-        }
+        return build_import_status_payload(db, resolved_user_id, period_days)
     except Exception as e:
         logger.error(f"Import status failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

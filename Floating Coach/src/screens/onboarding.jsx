@@ -97,9 +97,9 @@ function OnboardingScreen({ onComplete, apiStatus }) {
                           display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {[
                   ['🇳🇱', 'Volledig Nederlandstalig'],
-                  ['⌚', 'Garmin OAuth2 — geen wachtwoord, alle data versleuteld'],
+                  ['⌚', 'Garmin OAuth2 - geen wachtwoord, tokens versleuteld'],
                   ['🧠', 'Workouts aangepast aan je herstel (0-6)'],
-                  ['📤', 'FIT-bestanden direct in Garmin Connect'],
+                  ['📥', 'Rustige eerste import: activiteiten + core health'],
                 ].map(([ico, t]) => (
                   <li key={t} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <span className="mono" style={{
@@ -192,8 +192,9 @@ function OnboardingScreen({ onComplete, apiStatus }) {
                           flexDirection: 'column', gap: 10 }}>
                 {[
                   'Slaap, HRV en stress voor herstelscore',
-                  'Activiteiten — hardlopen, fietsen, zwemmen',
+                  'Activiteiten - hardlopen, fietsen, zwemmen',
                   'Trainingen direct uploaden naar je horloge',
+                  'Historische data wordt via Garmin webhooks aangeleverd',
                 ].map(t => (
                   <li key={t} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span style={{ color: 'var(--accent)', fontFamily: "'JetBrains Mono', monospace" }}>✓</span>
@@ -238,9 +239,9 @@ function OnboardingScreen({ onComplete, apiStatus }) {
               </h1>
               <p style={{ fontSize: 15, lineHeight: 1.55, color: 'var(--ink-3)',
                           marginTop: 18, maxWidth: 460 }}>
-                We synchroniseren nu je <b>laatste 90 dagen</b> aan data —
-                duurt 5 à 10 minuten in de achtergrond. Ondertussen krijg je al
-                een dashboard met je recente activiteiten.
+                We vragen nu gecontroleerd je <b>laatste 30 dagen activiteiten</b>
+                en <b>7 dagen core health</b> op. Garmin levert die data via
+                webhooks; meestal zie je de eerste records binnen enkele minuten.
               </p>
 
               <div style={{ marginTop: 24, padding: 16, background: 'var(--bg-soft)',
@@ -249,7 +250,7 @@ function OnboardingScreen({ onComplete, apiStatus }) {
                 <div style={{ flex: 1 }}>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--ink-2)',
                     textTransform: 'uppercase', letterSpacing: '.14em' }}>
-                    Backfill bezig
+                    Eerste import aangevraagd
                   </div>
                   <div style={{ height: 6, background: 'rgba(13,14,11,.12)', borderRadius: 3, marginTop: 6,
                                 overflow: 'hidden' }}>

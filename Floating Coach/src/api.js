@@ -86,6 +86,9 @@
   function fetchGarminRecovery(userId) {
     return getJson(`/garmin/recovery?user_id=${userId}`);
   }
+  function fetchGarminImportStatus(userId, periodDays = 30) {
+    return getJson(`/garmin/data/import-status?user_id=${userId}&period_days=${periodDays}`);
+  }
 
   // ---- Activities ----
   function fetchGarminActivities(userId, limit = 200, periodDays = 30) {
@@ -115,7 +118,7 @@
   window.FC_API = {
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
-    fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery,
+    fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
     loginWebUser, fetchWebUser,
     sendChatMessage,
   };
