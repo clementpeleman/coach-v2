@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     garmin_consumer_secret: Optional[str] = Field(default=None)
     garmin_redirect_uri: Optional[str] = Field(default=None)
     webapp_url: str = Field(default="http://localhost:8000")
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:8000",
+        description="Comma-separated allowed CORS origins",
+    )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @field_validator("encryption_key")
     @classmethod
