@@ -1,9 +1,46 @@
 """Application configuration and environment validation."""
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Values copied from .env.example / docs — never treat as real secrets.
+_PLACEHOLDER_VALUES = frozenset(
+    {
+        "your_telegram_bot_token_here",
+        "your_openai_api_key_here",
+        "your_44_character_fernet_key_here",
+        "your_garmin_consumer_key",
+        "your_garmin_consumer_secret",
+        "change_me_to_a_strong_password",
+        "changeme",
+        "password",
+        "test",
+    }
+)
+
+
+def _is_placeholder(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    if not normalized:
+        return True
+    if normalized in _PLACEHOLDER_VALUES:
+        return True
+    if normalized.startswith("your_") and normalized.endswith("_here"):
+        return True
+    return False
+
+
+def _optional_secret(value: Any) -> Optional[str]:
+    if value is None or _is_placeholder(value):
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return str(value)
 
 
 class Settings(BaseSettings):
@@ -16,10 +53,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Telegram (optional — webapp-only deployments skip this)
+    # Telegram — ignored by API unless you run the bot profile
     telegram_bot_token: Optional[str] = Field(default=None)
 
-    # OpenAI (optional at startup; required when using /web/chat)
+    # OpenAI — optional at startup; required when using /web/chat
     openai_api_key: Optional[str] = Field(default=None)
 
     # Database (optional — built from DB_* in database.py when empty)
@@ -47,47 +84,61 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
-    @field_validator("encryption_key")
+    @field_validator("encryption_key", mode="before")
     @classmethod
-    def validate_encryption_key(cls, v: str) -> str:
-        if not v:
-            raise ValueError("ENCRYPTION_KEY cannot be empty")
-        if len(v) != 44:
+    def validate_encryption_key(cls, v: Any) -> str:
+        if _is_placeholder(v):
             raise ValueError(
-                "ENCRYPTION_KEY must be 44 characters long. "
-                "Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+                "ENCRYPTION_KEY is not set. Generate with: "
+                "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
             )
-        return v
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("ENCRYPTION_KEY cannot be empty")
+        key = v.strip()
+        if len(key) != 44:
+            raise ValueError("ENCRYPTION_KEY must be 44 characters long (Fernet key).")
+        return key
 
     @field_validator("telegram_bot_token", mode="before")
     @classmethod
-    def empty_telegram_token_to_none(cls, v: Optional[str]) -> Optional[str]:
-        if v is None or (isinstance(v, str) and not v.strip()):
+    def normalize_telegram_token(cls, v: Any) -> Optional[str]:
+        token = _optional_secret(v)
+        if token is None:
             return None
-        if isinstance(v, str) and ":" not in v:
+        # Real Telegram bot tokens look like 123456789:AAH...
+        if ":" not in token:
             return None
-        return v
+        return token
 
     @field_validator("openai_api_key", mode="before")
     @classmethod
-    def empty_openai_key_to_none(cls, v: Optional[str]) -> Optional[str]:
-        if v is None or (isinstance(v, str) and not v.strip()):
-            return None
-        return v
+    def normalize_openai_key(cls, v: Any) -> Optional[str]:
+        return _optional_secret(v)
 
-    @field_validator("garmin_redirect_uri")
+    @field_validator("garmin_consumer_key", "garmin_consumer_secret", mode="before")
     @classmethod
-    def validate_garmin_redirect_uri(cls, v: Optional[str]) -> Optional[str]:
-        if v and not v.startswith("https://"):
+    def normalize_garmin_credentials(cls, v: Any) -> Optional[str]:
+        return _optional_secret(v)
+
+    @field_validator("garmin_redirect_uri", mode="before")
+    @classmethod
+    def validate_garmin_redirect_uri(cls, v: Any) -> Optional[str]:
+        uri = _optional_secret(v)
+        if uri and not uri.startswith("https://"):
             raise ValueError("GARMIN_REDIRECT_URI must start with https://")
-        return v
+        return uri
 
-    @field_validator("webapp_url")
+    @field_validator("webapp_url", mode="before")
     @classmethod
-    def validate_webapp_url(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
+    def validate_webapp_url(cls, v: Any) -> str:
+        if _is_placeholder(v):
+            return "http://localhost:8000"
+        if not isinstance(v, str) or not v.strip():
+            return "http://localhost:8000"
+        url = v.strip()
+        if not url.startswith(("http://", "https://")):
             raise ValueError("WEBAPP_URL must start with http:// or https://")
-        return v
+        return url
 
 
 @lru_cache
@@ -95,5 +146,4 @@ def get_settings() -> Settings:
     return Settings()
 
 
-# Backwards-compatible module-level accessor
 settings = get_settings()

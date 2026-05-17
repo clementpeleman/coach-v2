@@ -37,14 +37,15 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       DB_PORT: ${DB_PORT}
+      # API does not use Telegram — clear placeholders from shared .env
+      TELEGRAM_BOT_TOKEN: ""
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       GARMIN_CONSUMER_KEY: ${GARMIN_CONSUMER_KEY:-}
       GARMIN_CONSUMER_SECRET: ${GARMIN_CONSUMER_SECRET:-}
       GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-}
       WEBAPP_URL: ${WEBAPP_URL:-http://localhost:8000}
-    volumes:
-      - .:/app
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://coach.peleman.io}
     command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       db:
