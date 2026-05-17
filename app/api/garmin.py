@@ -13,7 +13,7 @@ from app.config import settings
 from app.database.database import get_db
 from app.tools.garmin_oauth import GarminOAuthService
 from app.tools.garmin_client import GarminAPIClient
-from app.database.models import GarminActivityData, GarminToken, OAuthSession
+from app.database.models import GarminActivityData, GarminHealthData, GarminToken, OAuthSession
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,85 @@ def compute_percent_change(current: float, baseline: float) -> Optional[float]:
     return round(((current - baseline) / baseline) * 100, 1)
 
 
+def _load_health_payload(record: Optional[GarminHealthData]) -> Dict:
+    if not record:
+        return {}
+    if isinstance(record.data, str):
+        try:
+            return json.loads(record.data)
+        except json.JSONDecodeError:
+            return {}
+    return record.data or {}
+
+
+def _latest_health_record(
+    db: Session,
+    user_id: int,
+    summary_type: str,
+    since: datetime,
+) -> Optional[GarminHealthData]:
+    return db.query(GarminHealthData).filter(
+        GarminHealthData.user_id == user_id,
+        GarminHealthData.summary_type == summary_type,
+        GarminHealthData.start_time >= since,
+    ).order_by(GarminHealthData.start_time.desc()).first()
+
+
+def _sleep_score(sleep: Dict) -> Optional[int]:
+    score = (
+        sleep.get("overallSleepScore", {}).get("value")
+        or sleep.get("sleepScores", {}).get("overall", {}).get("value")
+    )
+    return int(score) if isinstance(score, (int, float)) else None
+
+
+def _minutes(value_seconds: Optional[int]) -> int:
+    return int((value_seconds or 0) / 60)
+
+
+def _valid_numeric_values(values: Dict) -> list[float]:
+    return [
+        float(value)
+        for value in values.values()
+        if isinstance(value, (int, float)) and value >= 0
+    ]
+
+
+def _valid_stress_values(values: Dict) -> list[int]:
+    return [
+        int(value)
+        for value in values.values()
+        if isinstance(value, int) and value > 0
+    ]
+
+
+def _recovery_score(
+    sleep_score: Optional[int],
+    sleep_hours: Optional[float],
+    avg_stress: Optional[int],
+    body_battery: Optional[int],
+    hrv: Optional[int],
+) -> int:
+    score = 3.0
+
+    if sleep_score is not None:
+        score += (sleep_score - 70) / 15
+    elif sleep_hours is not None:
+        score += (sleep_hours - 7) / 1.5
+
+    if avg_stress is not None:
+        score += (45 - avg_stress) / 20
+
+    if body_battery is not None:
+        score += (body_battery - 50) / 25
+
+    if hrv is not None:
+        # Without a personal baseline we only apply a small stabilising signal.
+        score += (hrv - 45) / 35
+
+    return max(0, min(6, int(round(score))))
+
+
 def build_weekly_summary(
     current_week: Dict,
     baseline_weekly: Dict,
@@ -339,11 +418,14 @@ async def oauth_callback(
             client = GarminAPIClient(db, user_id)
             backfill_end = datetime.utcnow()
             backfill_start = backfill_end - timedelta(days=120)
+            client.backfill_dailies(backfill_start, backfill_end)
             backfill_result = request_activity_backfill_with_fallback(
                 client=client,
                 start=backfill_start,
                 end=backfill_end,
             )
+            for health_type in ["sleeps", "stressDetails", "hrv"]:
+                client.backfill_health_type(health_type, backfill_start, backfill_end)
             logger.info(f"Initial activity backfill requested after OAuth: {backfill_result}")
         except Exception as backfill_exc:
             logger.warning(f"Initial activity backfill after OAuth failed: {backfill_exc}")
@@ -657,13 +739,113 @@ async def weekly_analysis(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/recovery")
+async def get_recovery_snapshot(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    lookback_days: int = Query(14, ge=1, le=90, description="How far back to search for latest health data"),
+    db: Session = Depends(get_db)
+):
+    """Return the latest Garmin health metrics needed by the app recovery UI."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        since = datetime.utcnow() - timedelta(days=lookback_days)
+
+        daily_record = _latest_health_record(db, resolved_user_id, "dailies", since)
+        sleep_record = _latest_health_record(db, resolved_user_id, "sleeps", since)
+        stress_record = _latest_health_record(db, resolved_user_id, "stressDetails", since)
+        hrv_record = _latest_health_record(db, resolved_user_id, "hrv", since)
+
+        daily = _load_health_payload(daily_record)
+        sleep = _load_health_payload(sleep_record)
+        stress = _load_health_payload(stress_record)
+        hrv = _load_health_payload(hrv_record)
+
+        if not any([daily, sleep, stress, hrv]):
+            return {
+                "source": "empty",
+                "calendar_date": None,
+                "score": None,
+                "metrics": None,
+                "message": "No Garmin health data found yet. Sync Garmin Connect or request a backfill.",
+            }
+
+        stress_values = _valid_stress_values(stress.get("timeOffsetStressLevelValues", {}))
+        body_battery_values = _valid_numeric_values(stress.get("timeOffsetBodyBatteryValues", {}))
+        hrv_values = _valid_numeric_values(hrv.get("hrvValues", {}))
+        heart_rate_values = _valid_numeric_values(daily.get("timeOffsetHeartRateSamples", {}))
+
+        sleep_duration_seconds = sleep.get("durationInSeconds")
+        sleep_hours = round(sleep_duration_seconds / 3600, 1) if sleep_duration_seconds else None
+        sleep_score = _sleep_score(sleep)
+        avg_stress = round(sum(stress_values) / len(stress_values)) if stress_values else None
+        body_battery = round(body_battery_values[-1]) if body_battery_values else None
+        hrv_overnight = (
+            int(hrv.get("lastNightAvg"))
+            if isinstance(hrv.get("lastNightAvg"), (int, float))
+            else (round(sum(hrv_values) / len(hrv_values)) if hrv_values else None)
+        )
+
+        current_hr = round(heart_rate_values[-1]) if heart_rate_values else daily.get("averageHeartRateInBeatsPerMinute")
+        hr_trend = [round(value) for value in heart_rate_values[-60:]]
+
+        date_candidates = [
+            payload.get("calendarDate")
+            for payload in [sleep, daily, stress, hrv]
+            if payload.get("calendarDate")
+        ]
+        calendar_date = date_candidates[0] if date_candidates else None
+
+        score = _recovery_score(
+            sleep_score=sleep_score,
+            sleep_hours=sleep_hours,
+            avg_stress=avg_stress,
+            body_battery=body_battery,
+            hrv=hrv_overnight,
+        )
+
+        return {
+            "source": "live",
+            "calendar_date": calendar_date,
+            "score": score,
+            "metrics": {
+                "sleepScore": sleep_score,
+                "sleepHours": sleep_hours,
+                "deepSleepMin": _minutes(sleep.get("deepSleepDurationInSeconds")),
+                "remMin": _minutes(sleep.get("remSleepInSeconds")),
+                "lightMin": _minutes(sleep.get("lightSleepDurationInSeconds")),
+                "awakeMin": _minutes(sleep.get("awakeDurationInSeconds")),
+                "avgStress": avg_stress,
+                "bodyBattery": body_battery,
+                "hrvOvernight": hrv_overnight,
+                "restingHr": daily.get("restingHeartRateInBeatsPerMinute"),
+                "currentHeartRate": current_hr,
+                "hrvTrend": [round(value) for value in hrv_values[-7:]],
+                "stressTrend": stress_values[-24:],
+                "hrTrend": hr_trend,
+                "steps": daily.get("steps"),
+                "activeKilocalories": daily.get("activeKilocalories"),
+                "distanceMeters": daily.get("distanceInMeters"),
+            },
+            "records": {
+                "daily": daily_record.summary_id if daily_record else None,
+                "sleep": sleep_record.summary_id if sleep_record else None,
+                "stress": stress_record.summary_id if stress_record else None,
+                "hrv": hrv_record.summary_id if hrv_record else None,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Recovery snapshot failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/data/backfill")
 async def request_backfill(
     user_id: Optional[int] = Query(None, description="Internal user ID"),
     telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
-    data_type: str = Query(..., description="Type of data", regex="^(dailies|activities|both)$"),
+    data_type: str = Query(..., description="Type of data", regex="^(dailies|activities|sleeps|stress|hrv|health|both|all)$"),
     db: Session = Depends(get_db)
 ):
     """
@@ -680,16 +862,27 @@ async def request_backfill(
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         client = GarminAPIClient(db, resolved_user_id)
 
-        if data_type in ["dailies", "both"]:
+        if data_type in ["dailies", "health", "both", "all"]:
             client.backfill_dailies(start, end)
 
         activity_backfill = None
-        if data_type in ["activities", "both"]:
+        if data_type in ["activities", "both", "all"]:
             activity_backfill = request_activity_backfill_with_fallback(
                 client=client,
                 start=start,
                 end=end,
             )
+
+        health_types = []
+        if data_type in ["sleeps", "health", "both", "all"]:
+            health_types.append("sleeps")
+        if data_type in ["stress", "health", "both", "all"]:
+            health_types.append("stressDetails")
+        if data_type in ["hrv", "health", "both", "all"]:
+            health_types.append("hrv")
+
+        for health_type in health_types:
+            client.backfill_health_type(health_type, start, end)
 
         return {
             "status": "success",

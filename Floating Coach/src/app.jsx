@@ -8,7 +8,9 @@ const DEFAULT_RECOVERY = 4;
 function App() {
   const session = window.useSession();
   const apiStatus = window.useApiStatus();
-  const recoveryScore = DEFAULT_RECOVERY;
+  const [recoverySnapshot, setRecoverySnapshot] = useStateApp(null);
+  const recoveryMetrics = recoverySnapshot?.metrics || window.FC_DATA.recovery;
+  const recoveryScore = recoverySnapshot?.score ?? DEFAULT_RECOVERY;
 
   // Initial screen: OAuth paths like /dashboard?user_id=… or stored session → dashboard
   const [screen, setScreen] = useStateApp(() => {
@@ -25,6 +27,17 @@ function App() {
     let cancelled = false;
     window.FC_API.fetchWebUser(session.userId).then((p) => {
       if (!cancelled) setProfile(p);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [apiStatus.status, session.userId]);
+
+  // Live Garmin health snapshot for recovery, sleep, stress, HRV and body battery.
+  useEffectApp(() => {
+    setRecoverySnapshot(null);
+    if (apiStatus.status !== 'online' || !session.userId) return;
+    let cancelled = false;
+    window.FC_API.fetchGarminRecovery(session.userId).then((snapshot) => {
+      if (!cancelled && snapshot?.source === 'live') setRecoverySnapshot(snapshot);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [apiStatus.status, session.userId]);
@@ -69,6 +82,8 @@ function App() {
   const Active = SCREENS[screen]?.Comp;
   const screenProps = {
     recoveryScore,
+    recoveryData: recoveryMetrics,
+    recoverySnapshot,
     onNavigate: setScreen,
     apiStatus: apiStatus.status,
     userId: session.userId,
@@ -178,6 +193,7 @@ function App() {
       {/* Floating coach */}
       {screen !== 'chat' && (
         <window.CoachOrb recoveryScore={recoveryScore}
+                          recoveryData={recoveryMetrics}
                           onNavigateChat={() => setScreen('chat')}
                           currentScreen={screen}
                           apiStatus={apiStatus.status}

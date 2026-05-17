@@ -35,6 +35,7 @@ def read_root():
             "garmin_disconnect": "/garmin/auth/disconnect",
             "garmin_activities": "/garmin/activities",
             "garmin_weekly_analysis": "/garmin/analysis/weekly",
+            "garmin_recovery": "/garmin/recovery",
             "web_login": "/web/auth/login",
             "web_garmin_direct_start": "/web/auth/garmin/start",
             "web_me": "/web/auth/me",

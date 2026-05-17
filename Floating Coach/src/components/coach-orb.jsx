@@ -2,8 +2,9 @@
 const { useState, useEffect, useRef } = React;
 const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
-function CoachOrb({ recoveryScore, onNavigateChat, currentScreen, apiStatus, userId }) {
+function CoachOrb({ recoveryScore, recoveryData, onNavigateChat, currentScreen, apiStatus, userId }) {
   const online = apiStatus === 'online';
+  const R = recoveryData || window.FC_DATA.recovery;
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState(window.FC_DATA.chatSeed);
   const [draft, setDraft] = useState('');
@@ -11,13 +12,17 @@ function CoachOrb({ recoveryScore, onNavigateChat, currentScreen, apiStatus, use
   const scrollRef = useRef(null);
 
   // Track HR for the live "now" indicator inside the orb
-  const [hr, setHr] = useState(72);
+  const [hr, setHr] = useState(R.currentHeartRate || 72);
   useEffect(() => {
+    if (R.currentHeartRate) {
+      setHr(R.currentHeartRate);
+      return undefined;
+    }
     const t = setInterval(() => {
       setHr((v) => Math.max(58, Math.min(96, v + (Math.random() - 0.5) * 6)));
     }, 900);
     return () => clearInterval(t);
-  }, []);
+  }, [R.currentHeartRate]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -42,7 +47,7 @@ function CoachOrb({ recoveryScore, onNavigateChat, currentScreen, apiStatus, use
         setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);
       } catch (e) {
         setMessages((m) => [...m, { role: 'assistant',
-          content: `<i>Demo (backend offline):</i><br/>${mockReply(text, recoveryScore)}`,
+          content: `<i>Demo (backend offline):</i><br/>${mockReply(text, recoveryScore, R)}`,
           time: fmtTime(new Date().toISOString()) }]);
       } finally {
         setThinking(false);
@@ -50,7 +55,7 @@ function CoachOrb({ recoveryScore, onNavigateChat, currentScreen, apiStatus, use
       return;
     }
     setTimeout(() => {
-      const reply = mockReply(text, recoveryScore);
+      const reply = mockReply(text, recoveryScore, R);
       setMessages((m) => [...m, { role: 'assistant', content: reply, time: fmtTime(new Date().toISOString()) }]);
       setThinking(false);
     }, 1400);
@@ -194,9 +199,13 @@ if (!document.getElementById('__coach-orb-css')) {
   document.head.appendChild(s);
 }
 
-function mockReply(text, score) {
+function mockReply(text, score, recoveryData) {
   const t = text.toLowerCase();
-  if (t.includes('slaap')) return `Je sliep <b>7u 12 min</b> met sleep score <b>78</b>. Diepe slaap was 92 min — netjes. <i>Body Battery</i> staat op 64%.`;
+  const R = recoveryData || window.FC_DATA.recovery;
+  if (t.includes('slaap')) {
+    const sleep = R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'nog niet beschikbaar';
+    return `Je slaap staat op <b>${sleep}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap: ${R.deepSleepMin ?? '–'} min. <i>Body Battery</i>: ${R.bodyBattery ?? '–'}%.`;
+  }
   if (t.includes('herstel') || t.includes('recovery')) return `Herstelscore is <b>${score}/6</b>: ${recoveryLabel(score)}. ${recoveryAdvice(score)}`;
   if (t.includes('duur') || t.includes('duurloop')) return `Klaargezet. <b>75 min duurloop</b>, zone 2, doel HR 138-152. <i>FIT-bestand staat in Garmin Connect.</i>`;
   if (t.includes('interval') || t.includes('tempo')) return `Geen probleem. <b>5× 4 min</b> op tempo, 90s herstel. Warming-up 12 min, cooling-down 8 min. Klaar om te starten?`;

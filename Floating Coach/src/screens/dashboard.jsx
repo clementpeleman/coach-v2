@@ -2,8 +2,12 @@
 const { useEffect: useEffectD, useState: useStateD } = React;
 const FC = window.FC_UTILS;
 
-function Dashboard({ recoveryScore, onNavigate, apiStatus, userId }) {
+function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, apiStatus, userId }) {
   const D = window.FC_DATA;
+  const R = recoveryData || D.recovery;
+  const activeDate = recoverySnapshot?.calendar_date
+    ? new Date(`${recoverySnapshot.calendar_date}T12:00:00`)
+    : new Date();
   const online = apiStatus === 'online';
   const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
 
@@ -37,9 +41,14 @@ function Dashboard({ recoveryScore, onNavigate, apiStatus, userId }) {
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
 
   // Live HR ticker
-  const [hr, setHr] = useStateD(72);
-  const [hrHist, setHrHist] = useStateD(D.hrStream);
+  const [hr, setHr] = useStateD(R.currentHeartRate || D.hrStream[D.hrStream.length - 1] || 72);
+  const [hrHist, setHrHist] = useStateD((R.hrTrend && R.hrTrend.length) ? R.hrTrend : D.hrStream);
   useEffectD(() => {
+    if (R.hrTrend && R.hrTrend.length) {
+      setHrHist(R.hrTrend);
+      setHr(R.currentHeartRate || R.hrTrend[R.hrTrend.length - 1]);
+      return undefined;
+    }
     const t = setInterval(() => {
       setHrHist((arr) => {
         const last = arr[arr.length - 1];
@@ -50,7 +59,7 @@ function Dashboard({ recoveryScore, onNavigate, apiStatus, userId }) {
       });
     }, 700);
     return () => clearInterval(t);
-  }, []);
+  }, [R.currentHeartRate, R.hrTrend]);
 
   // Animated clock
   const [now, setNow] = useStateD(new Date());
@@ -65,8 +74,8 @@ function Dashboard({ recoveryScore, onNavigate, apiStatus, userId }) {
       <div className="screen-head">
         <div>
           <div className="label" style={{ marginBottom: 10 }}>
-            <span style={{ color: 'var(--ink)' }}>{FC.fmtDayName(D.today.toISOString())}</span>
-            {' · '}{D.today.toLocaleDateString('nl-BE', { day: '2-digit', month: 'long' })}
+            <span style={{ color: 'var(--ink)' }}>{FC.fmtDayName(activeDate.toISOString())}</span>
+            {' · '}{activeDate.toLocaleDateString('nl-BE', { day: '2-digit', month: 'long' })}
           </div>
           <h1>Goedemorgen, {D.user.firstName}.<br/>
               <em>Vandaag voel je je </em><span style={{ color: 'var(--ink)' }}>{FC.recoveryLabel(recoveryScore).toLowerCase()}</span><em>.</em>
@@ -103,8 +112,8 @@ function Dashboard({ recoveryScore, onNavigate, apiStatus, userId }) {
       <div className="grid-4">
         <MetricLive label="Hartslag nu" value={Math.round(hr)} unit="bpm" hist={hrHist} live />
         <MetricStat label="Recovery" value={recoveryScore} unit="/6" ring={ringPct} ringClass={ringClass} />
-        <MetricStat label="Body Battery" value={D.recovery.bodyBattery} unit="%" sub={`HRV ${D.recovery.hrvOvernight}ms`} />
-        <MetricStat label="Sleep score" value={D.recovery.sleepScore} unit="" sub={`${D.recovery.sleepHours.toFixed(1)}u slaap`} />
+        <MetricStat label="Body Battery" value={R.bodyBattery ?? '–'} unit={R.bodyBattery == null ? '' : "%"} sub={R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen HRV data'} />
+        <MetricStat label="Sleep score" value={R.sleepScore ?? '–'} unit="" sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u slaap` : 'Geen slaapdata'} />
       </div>
 
       {/* Week + recent */}

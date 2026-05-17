@@ -2,8 +2,17 @@
 const { useState: useStateW, useEffect: useEffectW } = React;
 const FCUW = window.FC_UTILS;
 
-function WorkoutScreen({ recoveryScore, onNavigate }) {
+function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId }) {
   const D = window.FC_DATA;
+  const online = apiStatus === 'online';
+  const activityQuery = window.useLiveData(
+    (uid) => window.FC_API.fetchGarminActivities(uid, 1, 30),
+    { activities: [] },
+    [],
+    { online, userId },
+  );
+  const latestActivity = activityQuery.data.activities?.[0];
+  const deviceName = latestActivity?.raw_data?.deviceName || latestActivity?.device_name || 'Garmin Connect';
   const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
 
   const blocks = buildStructure(rec.type);
@@ -46,7 +55,7 @@ function WorkoutScreen({ recoveryScore, onNavigate }) {
           <div className="mono" style={{ fontSize: 11, color: 'var(--ink)' }}>
             <b>workout_{rec.type.toLowerCase()}.FIT</b>
           </div>
-          <div style={{ marginTop: 4 }}>Gegenereerd · {FCUW.fmtTime(D.today.toISOString())}</div>
+          <div style={{ marginTop: 4 }}>Gegenereerd · {FCUW.fmtTime(new Date().toISOString())}</div>
         </div>
       </div>
 
@@ -227,9 +236,9 @@ function WorkoutScreen({ recoveryScore, onNavigate }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>⌚</div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 500, fontSize: 14 }}>Forerunner 965</div>
+                <div style={{ fontWeight: 500, fontSize: 14 }}>{deviceName}</div>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>
-                  Verbonden · 84% batterij
+                  {online && userId ? 'Verbonden via Garmin OAuth' : 'Wachten op Garmin login'}
                 </div>
               </div>
             </div>

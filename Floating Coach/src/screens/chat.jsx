@@ -2,18 +2,37 @@
 const { useState: useStateC, useEffect: useEffectC, useRef: useRefC } = React;
 const FCU = window.FC_UTILS;
 
-function ChatScreen({ recoveryScore, apiStatus, userId }) {
+function ChatScreen({ recoveryScore, recoveryData, apiStatus, userId }) {
   const D = window.FC_DATA;
+  const R = recoveryData || D.recovery;
+  const sleepIntro = R.sleepHours ? ` en je sliep ${R.sleepHours.toFixed(1)}u` : '';
   const online = apiStatus === 'online';
+  const activitiesQuery = window.useLiveData(
+    (uid) => window.FC_API.fetchGarminActivities(uid, 1, 30),
+    { activities: D.activities },
+    [],
+    { online, userId },
+  );
+  const recentActivity = activitiesQuery.data.activities?.[0] || D.activities[0];
   const [messages, setMessages] = useStateC([
     { role: 'assistant',
-      content: `Goedemorgen ${D.user.firstName}. Je <b>herstelscore is ${recoveryScore}/6</b> en je sliep 7u 12min. Hoe voel je je vandaag?`,
+      content: `Goedemorgen ${D.user.firstName}. Je <b>herstelscore is ${recoveryScore}/6</b>${sleepIntro}. Hoe voel je je vandaag?`,
       time: '08:02' },
   ]);
   const [draft, setDraft] = useStateC('');
   const [thinking, setThinking] = useStateC(false);
   const [lastError, setLastError] = useStateC(null);
   const scrollRef = useRefC(null);
+
+  useEffectC(() => {
+    setMessages((current) => {
+      if (current.length !== 1 || current[0].role !== 'assistant') return current;
+      return [{
+        ...current[0],
+        content: `Goedemorgen ${D.user.firstName}. Je <b>herstelscore is ${recoveryScore}/6</b>${sleepIntro}. Hoe voel je je vandaag?`,
+      }];
+    });
+  }, [recoveryScore, sleepIntro]);
 
   useEffectC(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -46,7 +65,7 @@ function ChatScreen({ recoveryScore, apiStatus, userId }) {
         // Fall back to mock reply so the conversation stays usable
         setMessages((m) => [...m, {
           role: 'assistant',
-          content: `<i>Demo antwoord (backend onbereikbaar):</i><br/><br/>${mockReplyChat(t, recoveryScore)}`,
+          content: `<i>Demo antwoord (backend onbereikbaar):</i><br/><br/>${mockReplyChat(t, recoveryScore, R)}`,
           time: FCU.fmtTime(new Date().toISOString()), source: 'demo',
         }]);
       } finally {
@@ -59,7 +78,7 @@ function ChatScreen({ recoveryScore, apiStatus, userId }) {
     setTimeout(() => {
       setMessages((m) => [...m, {
         role: 'assistant',
-        content: mockReplyChat(t, recoveryScore),
+        content: mockReplyChat(t, recoveryScore, R),
         time: FCU.fmtTime(new Date().toISOString()),
         source: 'demo',
       }]);
@@ -177,11 +196,11 @@ function ChatScreen({ recoveryScore, apiStatus, userId }) {
 
         <div className="card tight" style={{ background: 'var(--bg-soft)', borderColor: 'transparent' }}>
           <div className="label" style={{ marginBottom: 12 }}>Context vandaag</div>
-          <ContextRow k="Slaap" v={`${D.recovery.sleepHours.toFixed(1)}u (score ${D.recovery.sleepScore})`} />
-          <ContextRow k="Body Battery" v={`${D.recovery.bodyBattery}%`} />
-          <ContextRow k="HRV overnight" v={`${D.recovery.hrvOvernight}ms`} />
-          <ContextRow k="Resting HR" v={`${D.recovery.restingHr} bpm`} />
-          <ContextRow k="Stress" v={`${D.recovery.avgStress}/100`} />
+          <ContextRow k="Slaap" v={R.sleepHours ? `${R.sleepHours.toFixed(1)}u (score ${R.sleepScore ?? '–'})` : 'Geen slaapdata'} />
+          <ContextRow k="Body Battery" v={R.bodyBattery == null ? 'Geen data' : `${R.bodyBattery}%`} />
+          <ContextRow k="HRV overnight" v={R.hrvOvernight == null ? 'Geen data' : `${R.hrvOvernight}ms`} />
+          <ContextRow k="Resting HR" v={R.restingHr == null ? 'Geen data' : `${R.restingHr} bpm`} />
+          <ContextRow k="Stress" v={R.avgStress == null ? 'Geen data' : `${R.avgStress}/100`} />
           <ContextRow k="Recovery" v={`${recoveryScore}/6 · ${FCU.recoveryLabel(recoveryScore)}`} />
         </div>
 
@@ -194,9 +213,9 @@ function ChatScreen({ recoveryScore, apiStatus, userId }) {
               fontFamily: "'JetBrains Mono', monospace", fontWeight: 700,
             }}>↗</div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 500, fontSize: 14 }}>{D.activities[0].activity_name}</div>
+              <div style={{ fontWeight: 500, fontSize: 14 }}>{recentActivity.activity_name}</div>
               <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>
-                {(D.activities[0].distance_meters / 1000).toFixed(1)} km · {FCU.fmtDuration(D.activities[0].duration_seconds)} · {D.activities[0].average_heart_rate} bpm
+                {(recentActivity.distance_meters / 1000).toFixed(1)} km · {FCU.fmtDuration(recentActivity.duration_seconds)} · {recentActivity.average_heart_rate ?? '–'} bpm
               </div>
             </div>
           </div>
@@ -246,10 +265,11 @@ function ThinkDot({ d }) {
   }}></span>;
 }
 
-function mockReplyChat(text, score) {
+function mockReplyChat(text, score, recoveryData) {
   const t = text.toLowerCase();
-  if (t.includes('slaap')) return `Je sliep <b>7u 12 min</b> met sleep score <b>78</b>. Diepe slaap 92 min, REM 86 min, awake 18 min. Body Battery staat op 64%.<br/><br/>Dat is een degelijke nacht, vooral de hoeveelheid diepe slaap. Iets om op te bouwen.`;
-  if (t.includes('herstel') || t.includes('recovery') || t.includes('herstel check')) return `<b>Herstelscore ${score}/6 — ${FCU.recoveryLabel(score)}</b><br/><br/>${FCU.recoveryAdvice(score)} HRV staat op <b>58ms</b>, dat is op je gemiddelde. Resting HR <b>48 bpm</b>, ook stabiel.`;
+  const R = recoveryData || window.FC_DATA.recovery;
+  if (t.includes('slaap')) return `Je slaap staat op <b>${R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'geen data'}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap ${R.deepSleepMin ?? '–'} min, REM ${R.remMin ?? '–'} min, awake ${R.awakeMin ?? '–'} min. Body Battery staat op ${R.bodyBattery ?? '–'}%.<br/><br/>Dat is de meest recente Garmin-data die ik lokaal heb.`;
+  if (t.includes('herstel') || t.includes('recovery') || t.includes('herstel check')) return `<b>Herstelscore ${score}/6 — ${FCU.recoveryLabel(score)}</b><br/><br/>${FCU.recoveryAdvice(score)} HRV staat op <b>${R.hrvOvernight ?? '–'}ms</b>. Resting HR <b>${R.restingHr ?? '–'} bpm</b>.`;
   if (t.includes('duur')) return `Klaargezet. <b>75 min duurloop</b>, zone 2 (HR 138-152). Warming-up 8 min, duurblok 60 min, cooling-down 7 min. <i>FIT-bestand staat in Garmin Connect.</i><br/><br/>Wil je dat ik er ook een drinkmoment inplan?`;
   if (t.includes('interval') || t.includes('tempo') || t.includes('drempel')) return `<b>2× 12 min tempo</b> met 4 min herstel tussendoor.<br/><br/>WU 12 min easy · 12 min @ drempel (162-168) · 4 min easy · 12 min @ drempel · CD 8 min<br/><br/>Wil je dit nu starten?`;
   if (t.includes('analyseer') || t.includes('trainingsweek') || t.includes('week') || t.includes('activiteit')) return `<b>Deze week:</b><br/>· 3 sessies · 31 km · 3u 06min<br/>· Volume <span style="color:#c0392b">29% onder</span> 4-weken gemiddelde<br/>· Intensiteit op peil (1× drempel woensdag)<br/><br/>Voeg dit weekend een duurloop van 75-90 min toe om je weekvolume in balans te brengen.`;

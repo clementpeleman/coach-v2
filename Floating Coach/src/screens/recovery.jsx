@@ -2,8 +2,12 @@
 const { useEffect: useEffectR } = React;
 const FCUR = window.FC_UTILS;
 
-function RecoveryScreen({ recoveryScore, onNavigate }) {
+function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavigate }) {
   const D = window.FC_DATA;
+  const R = recoveryData || D.recovery;
+  const activeDate = recoverySnapshot?.calendar_date
+    ? new Date(`${recoverySnapshot.calendar_date}T12:00:00`)
+    : new Date();
   const ringPct = recoveryScore / 6;
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
   const c = 2 * Math.PI * 100;
@@ -13,7 +17,7 @@ function RecoveryScreen({ recoveryScore, onNavigate }) {
       <div className="screen-head">
         <div>
           <div className="label" style={{ marginBottom: 10 }}>
-            Hersteldiagnose · {D.today.toLocaleDateString('nl-BE', { day: '2-digit', month: 'long' })}
+            Hersteldiagnose · {activeDate.toLocaleDateString('nl-BE', { day: '2-digit', month: 'long' })}
           </div>
           <h1>Herstel.<br/><em>Hoe vandaag te trainen.</em></h1>
         </div>
@@ -109,20 +113,20 @@ function RecoveryScreen({ recoveryScore, onNavigate }) {
 
       {/* Inputs into the score */}
       <div className="grid-4">
-        <InputCard label="Slaap" value={`${D.recovery.sleepScore}`} unit="/100"
-          sub={`${D.recovery.sleepHours.toFixed(1)}u totaal`} contribution={28} />
-        <InputCard label="HRV overnacht" value={`${D.recovery.hrvOvernight}`} unit="ms"
+        <InputCard label="Slaap" value={`${R.sleepScore ?? '–'}`} unit={R.sleepScore == null ? "" : "/100"}
+          sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u totaal` : "Geen slaapdata"} contribution={28} />
+        <InputCard label="HRV overnacht" value={`${R.hrvOvernight ?? '–'}`} unit={R.hrvOvernight == null ? "" : "ms"}
           sub="bij gemiddelde" contribution={24} trend="flat" />
-        <InputCard label="Stress (avg 24h)" value={`${D.recovery.avgStress}`} unit="/100"
+        <InputCard label="Stress (avg 24h)" value={`${R.avgStress ?? '–'}`} unit={R.avgStress == null ? "" : "/100"}
           sub="laag-gemiddeld" contribution={22} trend="down" />
-        <InputCard label="Body Battery" value={`${D.recovery.bodyBattery}`} unit="%"
+        <InputCard label="Body Battery" value={`${R.bodyBattery ?? '–'}`} unit={R.bodyBattery == null ? "" : "%"}
           sub="bij ontwaken" contribution={26} trend="up" />
       </div>
 
       {/* Sleep detail + HRV trend */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        <SleepBreakdown />
-        <HRVTrend />
+        <SleepBreakdown recoveryData={R} />
+        <HRVTrend recoveryData={R} />
       </div>
     </div>
   );
@@ -154,14 +158,15 @@ function InputCard({ label, value, unit, sub, contribution, trend }) {
   );
 }
 
-function SleepBreakdown() {
+function SleepBreakdown({ recoveryData }) {
   const D = window.FC_DATA;
-  const total = D.recovery.deepSleepMin + D.recovery.remMin + D.recovery.lightMin + D.recovery.awakeMin;
+  const R = recoveryData || D.recovery;
+  const total = R.deepSleepMin + R.remMin + R.lightMin + R.awakeMin;
   const stages = [
-    { label: 'Diep', min: D.recovery.deepSleepMin, color: 'oklch(45% 0.10 250)' },
-    { label: 'REM',  min: D.recovery.remMin,       color: 'oklch(60% 0.16 280)' },
-    { label: 'Licht', min: D.recovery.lightMin,    color: 'oklch(75% 0.10 240)' },
-    { label: 'Awake', min: D.recovery.awakeMin,    color: 'oklch(85% 0.06 60)' },
+    { label: 'Diep', min: R.deepSleepMin || 0, color: 'oklch(45% 0.10 250)' },
+    { label: 'REM',  min: R.remMin || 0,       color: 'oklch(60% 0.16 280)' },
+    { label: 'Licht', min: R.lightMin || 0,    color: 'oklch(75% 0.10 240)' },
+    { label: 'Awake', min: R.awakeMin || 0,    color: 'oklch(85% 0.06 60)' },
   ];
 
   return (
@@ -170,11 +175,11 @@ function SleepBreakdown() {
         <h2>Slaap</h2>
         <div style={{ textAlign: 'right' }}>
           <div className="mono" style={{ fontSize: 24, fontWeight: 500 }}>
-            {D.recovery.sleepHours.toFixed(1)}<span style={{ fontSize: 13, color: 'var(--ink-4)' }}> uur</span>
+            {R.sleepHours ? R.sleepHours.toFixed(1) : '–'}<span style={{ fontSize: 13, color: 'var(--ink-4)' }}> uur</span>
           </div>
           <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)',
             textTransform: 'uppercase', letterSpacing: '.12em', marginTop: 2 }}>
-            score {D.recovery.sleepScore}/100
+            score {R.sleepScore ?? '–'}/100
           </div>
         </div>
       </div>
@@ -201,7 +206,7 @@ function SleepBreakdown() {
               {Math.floor(s.min / 60)}u {s.min % 60}m
             </div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)' }}>
-              {Math.round((s.min / total) * 100)}%
+              {total ? Math.round((s.min / total) * 100) : 0}%
             </div>
           </div>
         ))}
@@ -218,15 +223,17 @@ function SleepBreakdown() {
   );
 }
 
-function HRVTrend() {
+function HRVTrend({ recoveryData }) {
   const D = window.FC_DATA;
+  const R = recoveryData || D.recovery;
   const w = 460, h = 140, pad = 16;
-  const max = Math.max(...D.recovery.hrvTrend) + 4;
-  const min = Math.min(...D.recovery.hrvTrend) - 4;
+  const trend = (R.hrvTrend && R.hrvTrend.length) ? R.hrvTrend : D.recovery.hrvTrend;
+  const max = Math.max(...trend) + 4;
+  const min = Math.min(...trend) - 4;
   const range = max - min;
 
-  const pts = D.recovery.hrvTrend.map((v, i) => {
-    const x = pad + (i / (D.recovery.hrvTrend.length - 1)) * (w - pad * 2);
+  const pts = trend.map((v, i) => {
+    const x = pad + (i / Math.max(1, trend.length - 1)) * (w - pad * 2);
     const y = h - pad - ((v - min) / range) * (h - pad * 2);
     return [x, y, v];
   });
@@ -238,7 +245,7 @@ function HRVTrend() {
         <h2>HRV trend</h2>
         <div style={{ textAlign: 'right' }}>
           <div className="mono" style={{ fontSize: 24, fontWeight: 500 }}>
-            {D.recovery.hrvOvernight}<span style={{ fontSize: 13, color: 'var(--ink-4)' }}> ms</span>
+            {R.hrvOvernight ?? '–'}<span style={{ fontSize: 13, color: 'var(--ink-4)' }}> ms</span>
           </div>
           <div className="mono" style={{ fontSize: 11, color: 'var(--good)',
             textTransform: 'uppercase', letterSpacing: '.12em', marginTop: 2 }}>
@@ -250,8 +257,8 @@ function HRVTrend() {
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 140, marginTop: 14, display: 'block' }}>
         {/* Bands */}
         <rect x={pad} y={pad} width={w - pad*2} height={(h-pad*2)*0.33} fill="var(--bg-soft)" opacity=".5" />
-        <line x1={pad} x2={w-pad} y1={h - pad - ((D.recovery.hrvOvernight - 4 - min)/range)*(h-pad*2)}
-              y2={h - pad - ((D.recovery.hrvOvernight - 4 - min)/range)*(h-pad*2)}
+        <line x1={pad} x2={w-pad} y1={h - pad - (((R.hrvOvernight || min) - 4 - min)/range)*(h-pad*2)}
+              y2={h - pad - (((R.hrvOvernight || min) - 4 - min)/range)*(h-pad*2)}
               stroke="var(--ink-4)" strokeDasharray="2 4" />
         <path d={path} fill="none" stroke="var(--ink)" strokeWidth="2" />
         {/* Filled area */}

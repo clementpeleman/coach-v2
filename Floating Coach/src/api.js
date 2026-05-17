@@ -44,6 +44,15 @@
     return r.json();
   }
 
+  async function deleteJson(path) {
+    const r = await fetch(`${getBaseUrl()}${path}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`API ${path} failed (${r.status}): ${t}`);
+    }
+    return r.json();
+  }
+
   // ---- Health / availability probe ----
   async function ping(timeoutMs = 2500) {
     try {
@@ -72,7 +81,10 @@
     });
   }
   function disconnectGarmin(userId) {
-    return postJson(`/garmin/auth/disconnect?user_id=${userId}`, {});
+    return deleteJson(`/garmin/auth/disconnect?user_id=${userId}`);
+  }
+  function fetchGarminRecovery(userId) {
+    return getJson(`/garmin/recovery?user_id=${userId}`);
   }
 
   // ---- Activities ----
@@ -103,7 +115,7 @@
   window.FC_API = {
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
-    fetchGarminActivities, fetchWeeklyAnalysis,
+    fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery,
     loginWebUser, fetchWebUser,
     sendChatMessage,
   };

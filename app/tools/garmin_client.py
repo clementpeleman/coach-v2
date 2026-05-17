@@ -37,6 +37,9 @@ class GarminAPIClient:
     # Backfill endpoints
     BACKFILL_DAILIES_URL = "https://apis.garmin.com/wellness-api/rest/backfill/dailies"
     BACKFILL_ACTIVITIES_URL = "https://apis.garmin.com/wellness-api/rest/backfill/activities"
+    BACKFILL_SLEEPS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/sleeps"
+    BACKFILL_STRESS_URL = "https://apis.garmin.com/wellness-api/rest/backfill/stressDetails"
+    BACKFILL_HRV_URL = "https://apis.garmin.com/wellness-api/rest/backfill/hrv"
 
     def __init__(self, db: Session, user_id: int):
         """
@@ -481,6 +484,42 @@ class GarminAPIClient:
             logger.info(f"Backfill requested for activities: {start_date} to {end_date}")
         else:
             raise Exception(f"Backfill request failed: {response.text}")
+
+    def backfill_health_type(
+        self,
+        data_type: str,
+        start_date: datetime,
+        end_date: datetime
+    ):
+        """
+        Request backfill for a supported Garmin health summary type.
+
+        Data arrives asynchronously via configured Garmin webhooks.
+        """
+        urls = {
+            "sleeps": self.BACKFILL_SLEEPS_URL,
+            "stressDetails": self.BACKFILL_STRESS_URL,
+            "hrv": self.BACKFILL_HRV_URL,
+        }
+        url = urls.get(data_type)
+        if not url:
+            raise ValueError(f"Unsupported health backfill type: {data_type}")
+
+        params = {
+            "summaryStartTimeInSeconds": int(start_date.timestamp()),
+            "summaryEndTimeInSeconds": int(end_date.timestamp())
+        }
+
+        response = requests.get(
+            url,
+            headers=self._get_headers(),
+            params=params
+        )
+
+        if response.status_code == 202:
+            logger.info(f"Backfill requested for {data_type}: {start_date} to {end_date}")
+        else:
+            raise Exception(f"Backfill request failed for {data_type}: {response.text}")
 
     # =========================================================================
     # CONVENIENCE METHODS
