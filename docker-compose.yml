@@ -6,8 +6,10 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
-    ports:
-      - "${DB_PORT}:5432"
+    # No host port binding by default (Coolify/proxy uses internal network).
+    # For local dev: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+    expose:
+      - "5432"
     volumes:
       - ./pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,8 +27,8 @@ services:
     container_name: coach_app
     env_file:
       - .env
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       PYTHONPATH: /app
       DATABASE_URL: ""
