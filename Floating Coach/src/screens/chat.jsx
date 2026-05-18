@@ -3,20 +3,21 @@ const { useState: useStateC, useEffect: useEffectC, useRef: useRefC } = React;
 const FCU = window.FC_UTILS;
 
 function ChatScreen({
-  recoveryScore, recoveryData, weather, apiStatus, userId, onNavigate,
+  recoveryScore, recoveryData, recoverySnapshot, weather, apiStatus, userId, onNavigate,
   trainingProfile, chatMessages, setChatMessages, chatThinking, setChatThinking, resetChat,
   draftWorkout, setDraftWorkout,
 }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
   const online = apiStatus === 'online';
+  const dataSource = userId ? (recoverySnapshot?.source || 'empty') : 'demo';
   const activitiesQuery = window.useLiveData(
     (uid) => window.FC_API.fetchGarminActivities(uid, 1, 30),
     { activities: D.activities },
     [],
-    { online, userId },
+    { online, userId, cacheKey: 'chat_recent_activity', emptyData: { activities: [] } },
   );
-  const recentActivity = activitiesQuery.data.activities?.[0] || D.activities[0];
+  const recentActivity = activitiesQuery.data.activities?.[0] || (!userId ? D.activities[0] : null);
   const messages = chatMessages || D.chatSeed;
   const hasUserMessages = messages.some((message) => message.role === 'user');
   const setMessages = setChatMessages;
@@ -235,6 +236,7 @@ function ChatScreen({
           onNavigate={onNavigate}
           recoveryScore={recoveryScore}
           trainingProfile={trainingProfile}
+          dataSource={dataSource}
         />
 
         <div className="card tight">
@@ -267,7 +269,7 @@ function ChatScreen({
 
         <div className="card tight">
           <div className="label" style={{ marginBottom: 10 }}>Recente activiteit</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {recentActivity ? <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{
               width: 36, height: 36, borderRadius: 8, background: 'var(--bg-soft)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -279,14 +281,18 @@ function ChatScreen({
                 {(recentActivity.distance_meters / 1000).toFixed(1)} km · {FCU.fmtDuration(recentActivity.duration_seconds)} · {recentActivity.average_heart_rate ?? '–'} bpm
               </div>
             </div>
-          </div>
+          </div> : (
+            <div style={{ fontSize: 13, color: 'var(--ink-4)', lineHeight: 1.45 }}>
+              Nog geen recente live activiteit beschikbaar.
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recoveryScore, trainingProfile }) {
+function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recoveryScore, trainingProfile, dataSource }) {
   const plan = draftWorkout || window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore, trainingProfile });
   if (!plan || !window.FC_WORKOUT_PLAN) return null;
   const totalSec = (plan.blocks || []).reduce((sum, block) => sum + block.sec, 0);
@@ -329,10 +335,16 @@ function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recov
           <div className="label" style={{ color: 'oklch(70% 0.01 100)', marginBottom: 8 }}>Trainingvoorstel</div>
           <h2 style={{ color: '#fff', lineHeight: 1.15 }}>{typeLabel}</h2>
         </div>
-        <span className={plan.status === 'approved' ? 'tag accent' : 'tag'}
-          style={plan.status === 'approved' ? undefined : { background: 'oklch(24% 0.005 100)', color: 'oklch(78% 0.01 100)' }}>
-          {statusText}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <span className={plan.status === 'approved' ? 'tag accent' : 'tag'}
+            style={plan.status === 'approved' ? undefined : { background: 'oklch(24% 0.005 100)', color: 'oklch(78% 0.01 100)' }}>
+            {statusText}
+          </span>
+          <span className="mono" style={{ fontSize: 9, color: dataSource === 'stale-live' ? 'oklch(82% 0.12 75)' : 'oklch(66% 0.01 100)',
+            textTransform: 'uppercase', letterSpacing: '.12em' }}>
+            {dataSource === 'live' ? 'live data' : dataSource === 'stale-live' ? 'stale live' : dataSource === 'demo' ? 'demo' : 'geen live data'}
+          </span>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginTop: 16 }}>

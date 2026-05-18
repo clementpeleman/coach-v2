@@ -2,7 +2,7 @@
 const { useState: useStateW, useEffect: useEffectW } = React;
 const FCUW = window.FC_UTILS;
 
-const SPORT_OPTIONS = [
+const SPORT_OPTIONS = window.FC_WORKOUT_PLAN?.SPORT_OPTIONS || [
   { key: 'WALKING', label: 'Wandelen', shortLabel: 'Wandel', garminType: 'WALKING', metric: 'pace', targetLabel: 'Tempo', targetText: 'wandeltempo' },
   { key: 'RUNNING', label: 'Hardlopen', shortLabel: 'Run', garminType: 'RUNNING', metric: 'pace', targetLabel: 'Tempo', targetText: 'looptempo' },
   { key: 'CYCLING', label: 'Fietsen', shortLabel: 'Fiets', garminType: 'CYCLING', metric: 'speed', targetLabel: 'Snelheid', targetText: 'snelheid' },
@@ -10,7 +10,7 @@ const SPORT_OPTIONS = [
   { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo', targetText: 'zwemtempo' },
 ];
 
-const SPORT_DURATION_MINUTES = {
+const SPORT_DURATION_MINUTES = window.FC_WORKOUT_PLAN?.SPORT_DURATION_MINUTES || {
   WALKING: { HERSTEL: 45, DUUR: 70, THRESHOLD: 50, VO2MAX: 42, SPRINT: 35 },
   RUNNING: { HERSTEL: 40, DUUR: 60, THRESHOLD: 46, VO2MAX: 54, SPRINT: 37 },
   CYCLING: { HERSTEL: 55, DUUR: 95, THRESHOLD: 72, VO2MAX: 62, SPRINT: 48 },
@@ -25,13 +25,13 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
     (uid) => window.FC_API.fetchGarminActivities(uid, 1, 30),
     { activities: [] },
     [],
-    { online, userId },
+    { online, userId, cacheKey: 'workout_recent_activity', emptyData: { activities: [] } },
   );
   const trainingProfileQuery = window.useLiveData(
     (uid) => window.FC_API.fetchTrainingProfile(uid, 120, 7),
     { personal_targets: {}, sport_baselines: {}, workout_patterns: {}, method: { phase: 1 } },
     [],
-    { online, userId },
+    { online, userId, cacheKey: 'training_profile', emptyData: { personal_targets: {}, sport_baselines: {}, workout_patterns: {}, method: { phase: 1 } } },
   );
   const profileData = trainingProfile || trainingProfileQuery.data;
   const latestActivity = activityQuery.data.activities?.[0];
@@ -86,10 +86,15 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const draftMatchesView = draftMatchesSportAndType
     && Array.isArray(draftWorkout?.blocks)
     && draftWorkout.blocks.length > 0;
+  const planEngine = window.FC_WORKOUT_PLAN;
   const baseBlocks = draftMatchesView
     ? draftWorkout.blocks
-    : buildStructure(rec.type, sportType, personalSportProfile, structurePattern);
-  const defaultBlocks = draftMatchesView ? baseBlocks : fitBlocksToDuration(baseBlocks, plannedDuration);
+    : (planEngine?.buildStructure
+      ? planEngine.buildStructure(rec.type, sportType, personalSportProfile, structurePattern)
+      : buildStructure(rec.type, sportType, personalSportProfile, structurePattern));
+  const defaultBlocks = draftMatchesView
+    ? baseBlocks
+    : (planEngine?.fitBlocksToDuration ? planEngine.fitBlocksToDuration(baseBlocks, plannedDuration) : fitBlocksToDuration(baseBlocks, plannedDuration));
   const defaultBlocksKey = [
     rec.type,
     sportType,
@@ -1014,9 +1019,9 @@ function buildStructure(type, sportType = 'RUNNING', personalProfile = null, pat
   if (patternBlocks) return patternBlocks;
 
   if (type === 'HERSTEL') return [
-    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', color: colors.z1 }, sportType, 'z1', personalProfile),
+    withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '105-122', color: colors.z1 }, sportType, 'rest', personalProfile),
     withSportTarget({ label: sportType === 'WALKING' ? 'Rustige wandeling' : 'Easy blok', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', color: colors.rest }, sportType, 'rest', personalProfile),
-    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '110-120', color: colors.z1 }, sportType, 'z1', personalProfile),
+    withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '100-118', color: colors.z1 }, sportType, 'rest', personalProfile),
   ];
   if (type === 'DUUR') return [
     withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 8*60, hr: '125-135', color: colors.z1 }, sportType, 'z1', personalProfile),

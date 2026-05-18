@@ -11,12 +11,12 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
   const online = apiStatus === 'online';
   const rec = dashboardRecommendationFromDraft(draftWorkout, recoveryScore);
 
-  // Live data — falls back to mock when offline / no user / API error.
+  // Live data: logged-in users keep stale live data instead of silently seeing demo.
   const activitiesQuery = window.useLiveData(
     (uid) => window.FC_API.fetchGarminActivities(uid, 10, 7),
     { activities: D.activities, weekly_trend: D.weeklyTrend, summary: D.weeklySummary },
     [],
-    { online, userId },
+    { online, userId, cacheKey: 'dashboard_activities_7', emptyData: { activities: [], weekly_trend: [], summary: null } },
   );
   const weeklyQuery = window.useLiveData(
     (uid) => window.FC_API.fetchWeeklyAnalysis(uid),
@@ -29,14 +29,17 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
       insight: D.weeklyAnalysis.insight,
     },
     [],
-    { online, userId },
+    { online, userId, cacheKey: 'dashboard_weekly', emptyData: { current_week: null, baseline_weekly: null, deltas: {}, load_ratio: null, summary: null, insight: null } },
   );
 
-  const activities = activitiesQuery.data.activities || D.activities;
-  const weeklyTrend = activitiesQuery.data.weekly_trend || D.weeklyTrend;
-  const weekSummary = weeklyQuery.data.current_week || D.weeklySummary;
+  const activities = activitiesQuery.data.activities || (!userId ? D.activities : []);
+  const weeklyTrend = activitiesQuery.data.weekly_trend || (!userId ? D.weeklyTrend : []);
+  const weekSummary = weeklyQuery.data.current_week || (!userId ? D.weeklySummary : null);
   const analysis = weeklyQuery.data;
-  const source = (activitiesQuery.source === 'live' && weeklyQuery.source === 'live') ? 'live' : 'demo';
+  const source = !userId
+    ? 'demo'
+    : ([activitiesQuery.source, weeklyQuery.source].includes('live') ? 'live'
+      : ([activitiesQuery.source, weeklyQuery.source].includes('stale-live') ? 'stale-live' : 'empty'));
   const ringPct = (recoveryScore / 6);
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
   const weatherLine = weather?.temperature_c != null
@@ -99,8 +102,8 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
 
       {/* Week + recent */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20 }}>
-        <WeekChart weeklyTrend={weeklyTrend} weekSummary={weekSummary} analysis={analysis} />
-        <CoachInsight onNavigate={onNavigate} analysis={analysis} />
+        <WeekChart weeklyTrend={weeklyTrend} weekSummary={weekSummary} analysis={analysis} allowDemo={!userId} />
+        <CoachInsight onNavigate={onNavigate} analysis={analysis} allowDemo={!userId} />
       </div>
 
       <RecentActivities onNavigate={onNavigate} activities={activities} source={source} />
@@ -320,11 +323,11 @@ function MetricStat({ label, value, unit, sub, ring, ringClass }) {
   );
 }
 
-function WeekChart({ weeklyTrend, weekSummary, analysis }) {
-  const trend = (weeklyTrend && weeklyTrend.length) ? weeklyTrend : window.FC_DATA.weeklyTrend;
-  const summary = weekSummary || window.FC_DATA.weeklySummary;
+function WeekChart({ weeklyTrend, weekSummary, analysis, allowDemo }) {
+  const trend = (weeklyTrend && weeklyTrend.length) ? weeklyTrend : (allowDemo ? window.FC_DATA.weeklyTrend : []);
+  const summary = weekSummary || (allowDemo ? window.FC_DATA.weeklySummary : { duration_hours: 0, duration_seconds: 0 });
   const delta = analysis?.deltas?.duration_percent;
-  const max = Math.max(...trend.map(w => w.duration_hours || (w.duration_seconds || 0) / 3600));
+  const max = trend.length ? Math.max(...trend.map(w => w.duration_hours || (w.duration_seconds || 0) / 3600)) : 1;
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 18 }}>
@@ -350,6 +353,12 @@ function WeekChart({ weeklyTrend, weekSummary, analysis }) {
         </div>
       </div>
 
+      {!trend.length ? (
+        <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          border: '1px dashed var(--line)', borderRadius: 10, color: 'var(--ink-4)', fontSize: 13 }}>
+          Nog geen live weekdata beschikbaar.
+        </div>
+      ) : (
       <div style={{ display: 'flex', alignItems: 'end', gap: 14, height: 140,
                     padding: '0 4px', borderBottom: '1px solid var(--line)' }}>
         {trend.map((w, i) => {
@@ -367,7 +376,8 @@ function WeekChart({ weeklyTrend, weekSummary, analysis }) {
           );
         })}
       </div>
-      <div style={{ display: 'flex', gap: 14, marginTop: 8, padding: '0 4px' }}>
+      )}
+      {!!trend.length && <div style={{ display: 'flex', gap: 14, marginTop: 8, padding: '0 4px' }}>
         {trend.map((w) => (
           <div key={w.week_start} className="mono" style={{ flex: 1, textAlign: 'center',
                 fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase',
@@ -375,13 +385,13 @@ function WeekChart({ weeklyTrend, weekSummary, analysis }) {
             {new Date(w.week_start).toLocaleDateString('nl-BE', { day: '2-digit', month: 'short' }).replace('.', '')}
           </div>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }
 
-function CoachInsight({ onNavigate, analysis }) {
-  const a = analysis || window.FC_DATA.weeklyAnalysis;
+function CoachInsight({ onNavigate, analysis, allowDemo }) {
+  const a = analysis || (allowDemo ? window.FC_DATA.weeklyAnalysis : {});
   return (
     <div className="card" style={{ background: 'var(--bg-soft)', borderColor: 'transparent' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -391,7 +401,7 @@ function CoachInsight({ onNavigate, analysis }) {
           textTransform: 'uppercase', letterSpacing: '.14em' }}>nu</span>
       </div>
       <p style={{ fontSize: 16, lineHeight: 1.5, margin: 0 }}>
-        {a.summary || window.FC_DATA.weeklyAnalysis.summary}
+        {a.summary || 'Nog geen live weekanalyse beschikbaar.'}
       </p>
       <div style={{ height: 1, background: 'var(--line)', margin: '18px 0' }}></div>
       <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
@@ -399,7 +409,7 @@ function CoachInsight({ onNavigate, analysis }) {
         Advies
       </div>
       <p style={{ fontSize: 14, lineHeight: 1.5, margin: 0, color: 'var(--ink-2)' }}>
-        {a.insight || window.FC_DATA.weeklyAnalysis.insight}
+        {a.insight || 'Zodra Garmin-data geladen is, geef ik hier een concreet advies.'}
       </p>
       <button className="btn" onClick={() => onNavigate('chat')}
               style={{ marginTop: 18, width: '100%', justifyContent: 'center' }}>

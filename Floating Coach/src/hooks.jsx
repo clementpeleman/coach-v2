@@ -40,45 +40,96 @@ function useApiStatus() {
 }
 
 // ---- useLiveData<T> ----
-// Calls fetcher when (online && userId) — otherwise returns a fallback (demo data).
-// Returns { data, loading, error, source: 'live' | 'demo', refetch }.
+// Calls fetcher when (online && userId). For logged-in users, keeps last live data
+// instead of silently falling back to demo data when the API flakes.
+// Returns { data, loading, error, source, updatedAt, stale, refetch }.
 function useLiveData(fetcher, fallback, deps, opts = {}) {
-  const { online, userId } = opts;
+  const { online, userId, cacheKey, emptyData } = opts;
+  const storageKey = cacheKey && userId ? `fc_live_${cacheKey}_${userId}` : null;
+  const cached = storageKey ? readLiveCache(storageKey) : null;
+  const userEmptyData = emptyData !== undefined ? emptyData : fallback;
   const [state, setState] = useStateH({
-    data: fallback,
+    data: userId ? (cached?.data ?? userEmptyData) : fallback,
     loading: false,
     error: null,
-    source: 'demo',
+    source: userId ? (cached ? 'stale-live' : 'empty') : 'demo',
+    updatedAt: cached?.updatedAt || null,
+    stale: Boolean(userId && cached),
   });
   const reqId = useRefH(0);
 
   const refetch = useCallbackH(async () => {
-    if (!online || !userId) {
-      setState((s) => ({ ...s, data: fallback, loading: false, error: null, source: 'demo' }));
+    const latestCached = storageKey ? readLiveCache(storageKey) : null;
+    if (!userId) {
+      setState({ data: fallback, loading: false, error: null, source: 'demo', updatedAt: null, stale: false });
+      return;
+    }
+    if (!online) {
+      setState({
+        data: latestCached?.data ?? userEmptyData,
+        loading: false,
+        error: null,
+        source: latestCached ? 'stale-live' : 'empty',
+        updatedAt: latestCached?.updatedAt || null,
+        stale: Boolean(latestCached),
+      });
       return;
     }
     const id = ++reqId.current;
-    setState((s) => ({ ...s, loading: true, error: null }));
+    setState((s) => ({
+      ...s,
+      data: latestCached?.data ?? s.data ?? userEmptyData,
+      loading: true,
+      error: null,
+      source: latestCached ? 'stale-live' : s.source,
+      updatedAt: latestCached?.updatedAt || s.updatedAt,
+      stale: Boolean(latestCached),
+    }));
     try {
       const data = await fetcher(userId);
       if (id !== reqId.current) return;
-      setState({ data, loading: false, error: null, source: 'live' });
+      const updatedAt = new Date().toISOString();
+      if (storageKey) writeLiveCache(storageKey, data, updatedAt);
+      setState({ data, loading: false, error: null, source: 'live', updatedAt, stale: false });
     } catch (e) {
       if (id !== reqId.current) return;
-      // Fall back to demo data on error, but surface the error.
-      setState({ data: fallback, loading: false, error: e.message || 'Onbekende fout', source: 'demo' });
+      const fallbackCache = storageKey ? readLiveCache(storageKey) : null;
+      setState({
+        data: fallbackCache?.data ?? userEmptyData,
+        loading: false,
+        error: e.message || 'Onbekende fout',
+        source: fallbackCache ? 'stale-live' : 'empty',
+        updatedAt: fallbackCache?.updatedAt || null,
+        stale: Boolean(fallbackCache),
+      });
     }
-  }, [online, userId, ...deps]);
+  }, [online, userId, cacheKey, ...deps]);
 
   useEffectH(() => { refetch(); }, [refetch]);
 
   return { ...state, refetch };
 }
 
+function readLiveCache(key) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || 'null');
+    if (parsed && parsed.data) return parsed;
+  } catch (_) {}
+  return null;
+}
+
+function writeLiveCache(key, data, updatedAt) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ data, updatedAt }));
+  } catch (_) {}
+}
+
 // ---- ConnectionPill — small status indicator ----
 function ConnectionPill({ status, source, onClick }) {
   // status: API health; source: where the current data came from (live/demo)
   const isLive = status === 'online' && source === 'live';
+  const isStale = source === 'stale-live';
+  const isEmpty = source === 'empty';
   const isOffline = status === 'offline';
   const isDemo = !isLive && !isOffline;
 
@@ -86,6 +137,12 @@ function ConnectionPill({ status, source, onClick }) {
   if (isLive) {
     bg = 'oklch(94% 0.06 145)'; fg = 'oklch(35% 0.10 145)';
     label = 'LIVE'; dot = 'var(--good)';
+  } else if (isStale) {
+    bg = 'oklch(96% 0.04 80)'; fg = 'oklch(42% 0.10 70)';
+    label = 'STALE · LIVE'; dot = 'oklch(72% 0.16 70)';
+  } else if (isEmpty) {
+    bg = 'var(--bg-soft)'; fg = 'var(--ink-3)';
+    label = 'GEEN DATA'; dot = 'var(--ink-4)';
   } else if (isOffline) {
     bg = 'oklch(96% 0.04 60)';  fg = 'oklch(40% 0.12 50)';
     label = 'OFFLINE · DEMO'; dot = 'oklch(72% 0.16 60)';

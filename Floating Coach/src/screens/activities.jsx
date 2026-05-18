@@ -26,16 +26,16 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
       period_days: period,
     },
     [period],
-    { online, userId },
+    { online, userId, cacheKey: `activities_${period}`, emptyData: { activities: [], weekly_trend: [], summary: null, period_days: period } },
   );
   const profileQuery = window.useLiveData(
     (uid) => window.FC_API.fetchTrainingProfile(uid, 120, 7),
     { personal_targets: {}, sport_baselines: {} },
     [],
-    { online, userId },
+    { online, userId, cacheKey: 'training_profile', emptyData: { personal_targets: {}, sport_baselines: {} } },
   );
-  const allActivities = q.data.activities || D.activities;
-  const weeklyTrend  = q.data.weekly_trend || D.weeklyTrend;
+  const allActivities = q.data.activities || (!userId ? D.activities : []);
+  const weeklyTrend  = q.data.weekly_trend || (!userId ? D.weeklyTrend : []);
   const apiSummary   = q.data.summary;
   const displaySummary = sportFilter === 'ALL' ? apiSummary : null;
   const selectedBaseline = profileQuery.data.sport_baselines?.[canonicalSportFilter(sportFilter)] || null;

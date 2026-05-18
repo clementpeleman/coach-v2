@@ -8,15 +8,19 @@ const DEFAULT_RECOVERY = 4;
 function App() {
   const session = window.useSession();
   const apiStatus = window.useApiStatus();
-  const [recoverySnapshot, setRecoverySnapshot] = useStateApp(null);
+  const [recoverySnapshot, setRecoverySnapshot] = useStateApp(() => (
+    session.userId ? readAppLiveCache(`recovery_${session.userId}`)?.data || null : null
+  ));
   const [weather, setWeather] = useStateApp(null);
-  const [trainingProfile, setTrainingProfile] = useStateApp(null);
+  const [trainingProfile, setTrainingProfile] = useStateApp(() => (
+    session.userId ? readAppLiveCache(`training_profile_${session.userId}`)?.data || null : null
+  ));
   const chatStorageKey = `fc_chat_messages_v1_${session.userId || 'demo'}`;
-  const recoveryMetrics = recoverySnapshot?.metrics || window.FC_DATA.recovery;
+  const recoveryMetrics = recoverySnapshot?.metrics || (session.userId ? {} : window.FC_DATA.recovery);
   const recoveryScore = currentReadinessScore(
-    recoverySnapshot?.score ?? DEFAULT_RECOVERY,
+    recoverySnapshot?.score ?? (session.userId ? 0 : DEFAULT_RECOVERY),
     recoveryMetrics,
-    recoverySnapshot?.source === 'live',
+    recoverySnapshot?.source,
   );
   const [chatMessages, setChatMessages] = useStateApp(() => readStoredChat(chatStorageKey));
   const [chatThinking, setChatThinking] = useStateApp(false);
@@ -49,12 +53,25 @@ function App() {
 
   // Shared training profile: personal targets, sport baselines, and learned workout patterns.
   useEffectApp(() => {
-    setTrainingProfile(null);
-    if (apiStatus.status !== 'online' || !session.userId) return;
+    if (!session.userId) {
+      setTrainingProfile(null);
+      return;
+    }
+    const cacheKey = `training_profile_${session.userId}`;
+    const cached = readAppLiveCache(cacheKey);
+    if (cached?.data) setTrainingProfile({ ...cached.data, _source: 'stale-live', _updatedAt: cached.updatedAt });
+    if (apiStatus.status !== 'online') return;
     let cancelled = false;
     window.FC_API.fetchTrainingProfile(session.userId, 120, 7).then((profileData) => {
-      if (!cancelled) setTrainingProfile(profileData);
-    }).catch(() => {});
+      const updatedAt = new Date().toISOString();
+      writeAppLiveCache(cacheKey, profileData, updatedAt);
+      if (!cancelled) setTrainingProfile({ ...profileData, _source: 'live', _updatedAt: updatedAt });
+    }).catch((e) => {
+      const fallback = readAppLiveCache(cacheKey);
+      if (!cancelled && fallback?.data) {
+        setTrainingProfile({ ...fallback.data, _source: 'stale-live', _updatedAt: fallback.updatedAt, _error: e.message });
+      }
+    });
     return () => { cancelled = true; };
   }, [apiStatus.status, session.userId]);
 
@@ -120,12 +137,34 @@ function App() {
 
   // Live Garmin health snapshot for recovery, sleep, stress, HRV and body battery.
   useEffectApp(() => {
-    setRecoverySnapshot(null);
-    if (apiStatus.status !== 'online' || !session.userId) return;
+    if (!session.userId) {
+      setRecoverySnapshot(null);
+      return;
+    }
+    const cacheKey = `recovery_${session.userId}`;
+    const cached = readAppLiveCache(cacheKey);
+    if (cached?.data) {
+      setRecoverySnapshot({ ...cached.data, source: 'stale-live', stale: true, updated_at: cached.updatedAt });
+    }
+    if (apiStatus.status !== 'online') return;
     let cancelled = false;
     window.FC_API.fetchGarminRecovery(session.userId).then((snapshot) => {
-      if (!cancelled && snapshot?.source === 'live') setRecoverySnapshot(snapshot);
-    }).catch(() => {});
+      const updatedAt = new Date().toISOString();
+      const liveSnapshot = { ...snapshot, source: snapshot?.source || 'live', stale: false, updated_at: updatedAt };
+      if (snapshot?.source === 'live') writeAppLiveCache(cacheKey, liveSnapshot, updatedAt);
+      if (!cancelled) setRecoverySnapshot(liveSnapshot);
+    }).catch((e) => {
+      const fallback = readAppLiveCache(cacheKey);
+      if (!cancelled && fallback?.data) {
+        setRecoverySnapshot({
+          ...fallback.data,
+          source: 'stale-live',
+          stale: true,
+          error: e.message,
+          updated_at: fallback.updatedAt,
+        });
+      }
+    });
     return () => { cancelled = true; };
   }, [apiStatus.status, session.userId]);
 
@@ -210,6 +249,9 @@ function App() {
     .replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase() || 'CP';
   const garminConnected = profile?.garmin_connected ?? false;
   const isLive = apiStatus.status === 'online';
+  const appDataSource = session.userId
+    ? (recoverySnapshot?.source || trainingProfile?._source || 'empty')
+    : 'demo';
 
   const logout = () => {
     if (session.userId && isLive) {
@@ -252,7 +294,7 @@ function App() {
                         borderRadius: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span className="label">Backend</span>
-              <window.ConnectionPill status={apiStatus.status} source={isLive ? 'live' : 'demo'}
+              <window.ConnectionPill status={apiStatus.status} source={appDataSource}
                                       onClick={apiStatus.probe} />
             </div>
             <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', marginTop: 6,
@@ -291,9 +333,11 @@ function App() {
             <div style={{ flex: 1 }}>
               <div className="who">{userName}</div>
               <div className="stat">
-                {isLive
-                  ? (garminConnected ? 'Garmin · live' : (session.userId ? 'API · live' : 'Demo · login nodig'))
-                  : 'Demo modus'}
+                {appDataSource === 'stale-live'
+                  ? 'Garmin · stale'
+                  : (isLive
+                    ? (garminConnected ? 'Garmin · live' : (session.userId ? 'API · live' : 'Demo · login nodig'))
+                    : 'Demo modus')}
               </div>
             </div>
           </div>
@@ -356,7 +400,7 @@ function isLegacyDemoChat(messages) {
 }
 
 function currentReadinessScore(score, metrics, live) {
-  if (!live || !metrics || score == null) return score;
+  if (!['live', 'stale-live'].includes(live) || !metrics || score == null) return score;
   let adjusted = score;
   const currentBattery = metrics.bodyBatteryCurrent;
   const trainingPenalty = metrics.recentTrainingPenalty || 0;
@@ -370,6 +414,20 @@ function currentReadinessScore(score, metrics, live) {
   if (trainingPenalty >= 1.1 && currentBattery != null && currentBattery <= 25) adjusted = Math.min(adjusted, 2);
 
   return adjusted;
+}
+
+function readAppLiveCache(key) {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(`fc_live_${key}`) || 'null');
+    if (parsed?.data) return parsed;
+  } catch (_) {}
+  return null;
+}
+
+function writeAppLiveCache(key, data, updatedAt) {
+  try {
+    window.localStorage.setItem(`fc_live_${key}`, JSON.stringify({ data, updatedAt }));
+  } catch (_) {}
 }
 
 function appendUniqueChatMessages(messages, additions) {

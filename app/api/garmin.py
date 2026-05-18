@@ -2168,7 +2168,8 @@ async def get_recovery_snapshot(
             }
 
         stress_values = _valid_stress_values(stress.get("timeOffsetStressLevelValues", {}))
-        body_battery_values = _valid_numeric_series(stress.get("timeOffsetBodyBatteryValues", {}))
+        body_battery_series = _valid_numeric_offset_series(stress.get("timeOffsetBodyBatteryValues", {}))
+        body_battery_values = [value for _, value in body_battery_series]
         hrv_values = _valid_numeric_values(hrv.get("hrvValues", {}))
         heart_rate_values = _valid_numeric_values(daily.get("timeOffsetHeartRateSamples", {}))
 
@@ -2178,12 +2179,36 @@ async def get_recovery_snapshot(
         avg_stress = round(sum(stress_values) / len(stress_values)) if stress_values else None
         body_battery_at_wake = _body_battery_at_wake(stress, sleep)
         body_battery_current = round(body_battery_values[-1]) if body_battery_values else None
-        body_battery_for_score = body_battery_current
+        body_battery_current_at = None
+        body_battery_current_age_hours = None
+        stress_start = stress.get("startTimeInSeconds")
+        if body_battery_series and isinstance(stress_start, (int, float)):
+            last_offset, _ = body_battery_series[-1]
+            body_battery_current_dt = datetime.utcfromtimestamp(int(stress_start + last_offset))
+            body_battery_current_at = body_battery_current_dt.isoformat()
+            body_battery_current_age_hours = max(
+                0.0,
+                (datetime.utcnow() - body_battery_current_dt).total_seconds() / 3600,
+            )
+        stale_signals = []
+        if body_battery_current is None:
+            stale_signals.append("bodyBatteryCurrent_missing")
+        elif body_battery_current_age_hours is not None and body_battery_current_age_hours > 6:
+            stale_signals.append("bodyBatteryCurrent_stale")
+        body_battery_for_score = body_battery_current if not any(
+            signal.startswith("bodyBatteryCurrent_") for signal in stale_signals
+        ) else None
         hrv_overnight = (
             int(hrv.get("lastNightAvg"))
             if isinstance(hrv.get("lastNightAvg"), (int, float))
             else (round(sum(hrv_values) / len(hrv_values)) if hrv_values else None)
         )
+        if not stress_values:
+            stale_signals.append("stress_missing")
+        if not hrv_overnight:
+            stale_signals.append("hrv_missing")
+        if sleep_score is None and sleep_hours is None:
+            stale_signals.append("sleep_missing")
 
         current_hr = round(heart_rate_values[-1]) if heart_rate_values else daily.get("averageHeartRateInBeatsPerMinute")
         hr_trend = [round(value) for value in heart_rate_values[-60:]]
@@ -2204,20 +2229,43 @@ async def get_recovery_snapshot(
             hrv=hrv_overnight,
             recent_training_penalty=training_fatigue["penalty"],
         )
+        if body_battery_for_score is None and training_fatigue["penalty"] >= 0.4:
+            score = min(score, 3)
+        score_inputs = {
+            "sleepScore": sleep_score,
+            "sleepHours": sleep_hours,
+            "avgStress": avg_stress,
+            "bodyBatteryCurrent": body_battery_for_score,
+            "bodyBatteryCurrentAt": body_battery_current_at,
+            "bodyBatteryCurrentAgeHours": round(body_battery_current_age_hours, 1) if body_battery_current_age_hours is not None else None,
+            "hrvOvernight": hrv_overnight,
+            "recentTrainingPenalty": training_fatigue["penalty"],
+        }
+        score_confidence = "high"
+        if stale_signals:
+            score_confidence = "medium" if body_battery_for_score is not None else "low"
+        if len(stale_signals) >= 3:
+            score_confidence = "low"
 
         return {
             "source": "live",
             "calendar_date": calendar_date,
             "score": score,
             "score_model": {
-                "version": "current_readiness_v2",
+                "version": "current_readiness_v3",
                 "scale": "0-6",
+                "confidence": score_confidence,
+                "stale_signals": stale_signals,
+                "inputs": score_inputs,
                 "notes": [
                     "Health signals use sleep, stress, current Body Battery and HRV.",
                     "Recent training reduces the score for 48h based on duration and heart-rate intensity.",
                     "Very low current Body Battery caps readiness even after a good night of sleep.",
                 ],
             },
+            "scoreConfidence": score_confidence,
+            "staleSignals": stale_signals,
+            "scoreInputs": score_inputs,
             "metrics": {
                 "sleepScore": sleep_score,
                 "sleepHours": sleep_hours,
@@ -2229,7 +2277,8 @@ async def get_recovery_snapshot(
                 "bodyBattery": body_battery_for_score,
                 "bodyBatteryAtWake": body_battery_at_wake,
                 "bodyBatteryCurrent": body_battery_current,
-                "bodyBatteryScoreSource": "current" if body_battery_current is not None else None,
+                "bodyBatteryCurrentAt": body_battery_current_at,
+                "bodyBatteryScoreSource": "current" if body_battery_for_score is not None else None,
                 "hrvOvernight": hrv_overnight,
                 "restingHr": daily.get("restingHeartRateInBeatsPerMinute"),
                 "currentHeartRate": current_hr,

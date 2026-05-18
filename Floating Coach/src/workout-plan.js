@@ -1,11 +1,11 @@
 // Shared workout draft builder for chat + workout surfaces.
 (function () {
   const SPORT_OPTIONS = [
-    { key: 'WALKING', label: 'Wandelen', shortLabel: 'Wandel', garminType: 'WALKING', metric: 'pace', targetLabel: 'Tempo' },
-    { key: 'RUNNING', label: 'Hardlopen', shortLabel: 'Run', garminType: 'RUNNING', metric: 'pace', targetLabel: 'Tempo' },
-    { key: 'CYCLING', label: 'Fietsen', shortLabel: 'Fiets', garminType: 'CYCLING', metric: 'speed', targetLabel: 'Snelheid' },
-    { key: 'INDOOR_CYCLING', label: 'Indoor fietsen', shortLabel: 'Zwift', garminType: 'INDOOR_CYCLING', metric: 'speed', targetLabel: 'Snelheid' },
-    { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo' },
+    { key: 'WALKING', label: 'Wandelen', shortLabel: 'Wandel', garminType: 'WALKING', metric: 'pace', targetLabel: 'Tempo', targetText: 'wandeltempo' },
+    { key: 'RUNNING', label: 'Hardlopen', shortLabel: 'Run', garminType: 'RUNNING', metric: 'pace', targetLabel: 'Tempo', targetText: 'looptempo' },
+    { key: 'CYCLING', label: 'Fietsen', shortLabel: 'Fiets', garminType: 'CYCLING', metric: 'speed', targetLabel: 'Snelheid', targetText: 'snelheid' },
+    { key: 'INDOOR_CYCLING', label: 'Indoor fietsen', shortLabel: 'Zwift', garminType: 'INDOOR_CYCLING', metric: 'speed', targetLabel: 'Snelheid', targetText: 'Zwift-snelheid' },
+    { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo', targetText: 'zwemtempo' },
   ];
 
   const SPORT_DURATION_MINUTES = {
@@ -30,7 +30,8 @@
     const pattern = trainingProfile?.workout_patterns?.by_type?.[type];
     const sportType = previous?.sportType || pattern?.preferred_sport || sportFromRecommendation(rec.sport);
     const durationMin = previous?.durationMin || plannedDurationForSport(type, sportType, rec.duration, pattern);
-    const blocks = fitBlocksToDuration(buildStructure(type, sportType), durationMin);
+    const personalProfile = trainingProfile?.personal_targets?.[sportType] || null;
+    const blocks = fitBlocksToDuration(buildStructure(type, sportType, personalProfile, pattern), durationMin);
     return {
       id: previous?.id || `draft-${Date.now()}`,
       status: previous?.status || 'draft',
@@ -91,7 +92,8 @@
 
     const interval = lower.match(/\b(\d{1,2})\s*x\s*(\d{1,2})\s*(min|m|')\b/);
     if (interval && ['THRESHOLD', 'VO2MAX'].includes(next.type)) {
-      next.blocks = buildCustomIntervals(next.type, next.sportType, Number(interval[1]), Number(interval[2]) * 60);
+      const personalProfile = context.trainingProfile?.personal_targets?.[next.sportType] || null;
+      next.blocks = buildCustomIntervals(next.type, next.sportType, Number(interval[1]), Number(interval[2]) * 60, personalProfile);
       next.durationMin = Math.round(next.blocks.reduce((sum, block) => sum + block.sec, 0) / 60);
       rebuild = false;
       changed = true;
@@ -110,7 +112,9 @@
     }
 
     if (rebuild) {
-      next.blocks = fitBlocksToDuration(buildStructure(next.type, next.sportType), next.durationMin);
+      const personalProfile = context.trainingProfile?.personal_targets?.[next.sportType] || null;
+      const pattern = context.trainingProfile?.workout_patterns?.by_type?.[next.type] || null;
+      next.blocks = fitBlocksToDuration(buildStructure(next.type, next.sportType, personalProfile, pattern), next.durationMin);
     }
     if (!changed) return { draft: current, changed: false, summary: null };
     next.updatedAt = new Date().toISOString();
@@ -163,27 +167,30 @@
     return SPORT_DURATION_MINUTES[sportType]?.[type] || fallback || 45;
   }
 
-  function buildStructure(type, sportType) {
+  function buildStructure(type, sportType, personalProfile = null, pattern = null) {
     const colors = {
       rest: 'oklch(48% 0.05 220)',
       z1: 'oklch(55% 0.06 220)',
       z2: 'oklch(62% 0.10 145)',
+      z3: 'oklch(72% 0.14 100)',
       z4: 'oklch(75% 0.18 60)',
       z5: 'oklch(68% 0.22 25)',
     };
-    const target = (block, zone) => ({ ...block, ...metricForSport(sportType, zone) });
+    const patternBlocks = buildPatternIntervals(type, sportType, personalProfile, pattern, colors);
+    if (patternBlocks) return patternBlocks;
+    const target = (block, zone) => withSportTarget(block, sportType, zone, personalProfile);
     if (type === 'HERSTEL') return [
-      target({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '120-130', color: colors.z1 }, 'z1'),
+      target({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 5*60, hr: '105-122', color: colors.z1 }, 'rest'),
       target({ label: sportType === 'WALKING' ? 'Rustige wandeling' : 'Easy blok', shortLabel: 'Easy', zone: 'Z1', sec: 30*60, hr: '110-128', color: colors.rest }, 'rest'),
-      target({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '110-120', color: colors.z1 }, 'z1'),
+      target({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 5*60, hr: '100-118', color: colors.z1 }, 'rest'),
     ];
     if (type === 'DUUR') return [
       target({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 8*60, hr: '125-135', color: colors.z1 }, 'z1'),
       target({ label: 'Duurblok zone 2', shortLabel: 'Z2', zone: 'Z2', sec: 45*60, hr: '138-152', color: colors.z2 }, 'z2'),
       target({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 7*60, hr: '120-135', color: colors.z1 }, 'z1'),
     ];
-    if (type === 'THRESHOLD') return buildCustomIntervals(type, sportType, 2, 12*60);
-    if (type === 'VO2MAX') return buildCustomIntervals(type, sportType, 6, 3*60);
+    if (type === 'THRESHOLD') return buildCustomIntervals(type, sportType, 2, 12*60, personalProfile);
+    if (type === 'VO2MAX') return buildCustomIntervals(type, sportType, 6, 3*60, personalProfile);
     if (type === 'SPRINT') return [
       target({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, 'z1'),
       ...Array(10).fill(0).flatMap((_, index) => [
@@ -195,7 +202,7 @@
     return [];
   }
 
-  function buildCustomIntervals(type, sportType, count, workSec) {
+  function buildCustomIntervals(type, sportType, count, workSec, personalProfile = null) {
     const colors = {
       z1: 'oklch(55% 0.06 220)',
       z4: 'oklch(75% 0.18 60)',
@@ -205,7 +212,7 @@
     const workZone = isThreshold ? 'z4' : 'z5';
     const workLabel = isThreshold ? 'Tempo blok' : 'VO2 interval';
     const restSec = isThreshold ? 4*60 : Math.max(90, Math.min(3*60, workSec));
-    const target = (block, zone) => ({ ...block, ...metricForSport(sportType, zone) });
+    const target = (block, zone) => withSportTarget(block, sportType, zone, personalProfile);
     const blocks = [
       target({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: 10*60, hr: '125-138', color: colors.z1 }, 'z1'),
     ];
@@ -223,6 +230,51 @@
       }
     }
     blocks.push(target({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: 8*60, hr: '120-135', color: colors.z1 }, 'z1'));
+    return blocks;
+  }
+
+  function parsePatternStructure(structure) {
+    const text = String(structure || '').toLowerCase();
+    const match = text.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)(min|s)/);
+    if (!match) return null;
+    const count = Number(match[1]);
+    const value = Number(match[2]);
+    if (!count || !value) return null;
+    return { count, workSec: match[3] === 's' ? value : value * 60 };
+  }
+
+  function buildPatternIntervals(type, sportType, personalProfile, pattern, colors) {
+    const parsed = parsePatternStructure(pattern?.typical_structure);
+    if (!parsed || !['THRESHOLD', 'VO2MAX', 'SPRINT'].includes(type)) return null;
+    const settings = {
+      THRESHOLD: { label: 'Tempo blok', short: 'Tempo', zone: 'Z4', metric: 'z4', restSec: 4*60, warmSec: 10*60, coolSec: 8*60, color: colors.z4 },
+      VO2MAX: { label: 'VO2 interval', short: 'VO2', zone: 'Z5', metric: 'z5', restSec: 3*60, warmSec: 10*60, coolSec: 8*60, color: colors.z5 },
+      SPRINT: { label: 'Sprint', short: 'SP', zone: 'Z5', metric: 'z5', restSec: 90, warmSec: 10*60, coolSec: 7*60, color: colors.z5 },
+    }[type];
+    const blocks = [
+      withSportTarget({ label: 'Warming-up', shortLabel: 'WU', zone: 'Z1', sec: settings.warmSec, hr: '125-138', color: colors.z1 }, sportType, 'z1', personalProfile),
+    ];
+    for (let index = 0; index < parsed.count; index += 1) {
+      blocks.push(withSportTarget({
+        label: `${settings.label} ${index + 1}`,
+        shortLabel: settings.short,
+        zone: settings.zone,
+        sec: parsed.workSec,
+        hr: type === 'THRESHOLD' ? '162-170' : '> 175',
+        color: settings.color,
+      }, sportType, settings.metric, personalProfile));
+      if (index < parsed.count - 1) {
+        blocks.push(withSportTarget({
+          label: 'Herstel',
+          shortLabel: 'rust',
+          zone: 'Z1',
+          sec: settings.restSec,
+          hr: type === 'SPRINT' ? '110-130' : '130-140',
+          color: colors.z1,
+        }, sportType, type === 'SPRINT' ? 'rest' : 'z1', personalProfile));
+      }
+    }
+    blocks.push(withSportTarget({ label: 'Cooling-down', shortLabel: 'CD', zone: 'Z1', sec: settings.coolSec, hr: '120-135', color: colors.z1 }, sportType, 'z1', personalProfile));
     return blocks;
   }
 
@@ -267,6 +319,32 @@
     return table[sportType]?.[zone] || table.RUNNING[zone] || {};
   }
 
+  function effortForMetricZone(metricZone) {
+    if (metricZone === 'z2') return 'endurance';
+    if (metricZone === 'z4') return 'threshold';
+    if (metricZone === 'z5') return 'vo2';
+    return 'easy';
+  }
+
+  function withSportTarget(block, sportType, metricZone, personalProfile) {
+    const zone = metricZone || block.metricZone || 'z1';
+    const defaults = metricForSport(sportType, zone);
+    const effort = effortForMetricZone(zone);
+    const personalZone = personalProfile?.zones?.[effort];
+    const personalMetric = personalZone?.metric;
+    const personalTarget = personalProfile?.metric_type === 'speed'
+      ? { speed: personalMetric || defaults.speed }
+      : { pace: personalMetric || defaults.pace };
+    return {
+      ...block,
+      ...defaults,
+      ...personalTarget,
+      hr: personalZone?.hr || block.hr,
+      personalized: Boolean(personalMetric || personalZone?.hr),
+      source: personalZone?.source || 'fallback',
+    };
+  }
+
   function fitBlocksToDuration(blocks, durationMin) {
     const targetSec = Math.max(5, Math.round(durationMin || 0)) * 60;
     const currentSec = blocks.reduce((sum, block) => sum + block.sec, 0);
@@ -299,9 +377,13 @@
   window.FC_WORKOUT_PLAN = {
     SPORT_OPTIONS,
     TYPE_LABELS,
+    SPORT_DURATION_MINUTES,
     buildDraft,
     updateDraftFromText,
     approveDraft,
+    buildStructure,
+    fitBlocksToDuration,
+    metricForSport,
     sportLabel,
     typeLabel,
     targetForBlock,
