@@ -11,6 +11,8 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
   const ringPct = recoveryScore / 6;
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
   const c = 2 * Math.PI * 100;
+  const bodyBatteryAtWake = R.bodyBatteryAtWake ?? R.bodyBattery ?? null;
+  const hasRecentTraining = R.recentTrainingLoad != null || Boolean(R.hardestRecentActivity);
 
   return (
     <div data-screen-label="Recovery assessment" className="col" style={{ gap: 24 }}>
@@ -119,12 +121,14 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
           sub="bij gemiddelde" contribution={24} trend="flat" />
         <InputCard label="Stress (avg 24h)" value={`${R.avgStress ?? '–'}`} unit={R.avgStress == null ? "" : "/100"}
           sub="laag-gemiddeld" contribution={22} trend="down" />
-        <InputCard label="Body Battery" value={`${R.bodyBattery ?? '–'}`} unit={R.bodyBattery == null ? "" : "%"}
+        <InputCard label="Body Battery" value={`${bodyBatteryAtWake ?? '–'}`} unit={bodyBatteryAtWake == null ? "" : "%"}
           sub="bij ontwaken" contribution={26} trend="up" />
-        <InputCard label="Recente training" value={`${R.recentTrainingLoad ?? '–'}`} unit={R.recentTrainingLoad == null ? "" : "load"}
-          sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel}` : "Laatste 48 uur"}
-          contribution={Math.min(100, Math.round((R.recentTrainingPenalty || 0) * 45))}
-          trend={(R.recentTrainingPenalty || 0) >= 0.8 ? "down" : "flat"} />
+        {hasRecentTraining && (
+          <InputCard label="Recente training" value={`${R.recentTrainingLoad ?? '–'}`} unit={R.recentTrainingLoad == null ? "" : "load"}
+            sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel}` : "Laatste 48 uur"}
+            contribution={Math.min(100, Math.round((R.recentTrainingPenalty || 0) * 45))}
+            trend={(R.recentTrainingPenalty || 0) >= 0.8 ? "down" : "flat"} />
+        )}
       </div>
 
       {R.hardestRecentActivity && (

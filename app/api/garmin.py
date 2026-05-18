@@ -1347,6 +1347,21 @@ def _valid_numeric_values(values: Dict) -> list[float]:
     ]
 
 
+def _valid_numeric_series(values: Dict) -> list[float]:
+    """Return numeric time-offset values sorted by their offset when possible."""
+    rows = []
+    for offset, value in values.items():
+        if not isinstance(value, (int, float)) or value < 0:
+            continue
+        try:
+            sort_key = int(offset)
+        except (TypeError, ValueError):
+            sort_key = len(rows)
+        rows.append((sort_key, float(value)))
+    rows.sort(key=lambda row: row[0])
+    return [value for _, value in rows]
+
+
 def _valid_stress_values(values: Dict) -> list[int]:
     return [
         int(value)
@@ -2080,7 +2095,7 @@ async def get_recovery_snapshot(
             }
 
         stress_values = _valid_stress_values(stress.get("timeOffsetStressLevelValues", {}))
-        body_battery_values = _valid_numeric_values(stress.get("timeOffsetBodyBatteryValues", {}))
+        body_battery_values = _valid_numeric_series(stress.get("timeOffsetBodyBatteryValues", {}))
         hrv_values = _valid_numeric_values(hrv.get("hrvValues", {}))
         heart_rate_values = _valid_numeric_values(daily.get("timeOffsetHeartRateSamples", {}))
 
@@ -2088,7 +2103,8 @@ async def get_recovery_snapshot(
         sleep_hours = round(sleep_duration_seconds / 3600, 1) if sleep_duration_seconds else None
         sleep_score = _sleep_score(sleep)
         avg_stress = round(sum(stress_values) / len(stress_values)) if stress_values else None
-        body_battery = round(body_battery_values[-1]) if body_battery_values else None
+        body_battery_at_wake = round(body_battery_values[0]) if body_battery_values else None
+        body_battery_current = round(body_battery_values[-1]) if body_battery_values else None
         hrv_overnight = (
             int(hrv.get("lastNightAvg"))
             if isinstance(hrv.get("lastNightAvg"), (int, float))
@@ -2110,7 +2126,7 @@ async def get_recovery_snapshot(
             sleep_score=sleep_score,
             sleep_hours=sleep_hours,
             avg_stress=avg_stress,
-            body_battery=body_battery,
+            body_battery=body_battery_at_wake if body_battery_at_wake is not None else body_battery_current,
             hrv=hrv_overnight,
             recent_training_penalty=training_fatigue["penalty"],
         )
@@ -2135,7 +2151,9 @@ async def get_recovery_snapshot(
                 "lightMin": _minutes(sleep.get("lightSleepDurationInSeconds")),
                 "awakeMin": _minutes(sleep.get("awakeDurationInSeconds")),
                 "avgStress": avg_stress,
-                "bodyBattery": body_battery,
+                "bodyBattery": body_battery_at_wake,
+                "bodyBatteryAtWake": body_battery_at_wake,
+                "bodyBatteryCurrent": body_battery_current,
                 "hrvOvernight": hrv_overnight,
                 "restingHr": daily.get("restingHeartRateInBeatsPerMinute"),
                 "currentHeartRate": current_hr,

@@ -12,19 +12,6 @@ function CoachOrb({
   const [draft, setDraft] = useState('');
   const scrollRef = useRef(null);
 
-  // Track HR for the live "now" indicator inside the orb
-  const [hr, setHr] = useState(R.currentHeartRate || 72);
-  useEffect(() => {
-    if (R.currentHeartRate) {
-      setHr(R.currentHeartRate);
-      return undefined;
-    }
-    const t = setInterval(() => {
-      setHr((v) => Math.max(58, Math.min(96, v + (Math.random() - 0.5) * 6)));
-    }, 900);
-    return () => clearInterval(t);
-  }, [R.currentHeartRate]);
-
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -97,8 +84,7 @@ function CoachOrb({
               <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
                                               textTransform: 'uppercase', letterSpacing: '.14em',
                                               marginTop: 2 }}>
-                <span className="live-dot" style={{ marginRight: 6, verticalAlign: 'middle' }}></span>
-                {Math.round(hr)} bpm · Recovery {recoveryScore}/6
+                Recovery {recoveryScore}/6
               </div>
             </div>
             <button onClick={() => setOpen(false)} aria-label="Close" style={{
@@ -164,8 +150,7 @@ function CoachOrb({
         <div className="meta">
           <div className="name">Klaar voor training</div>
           <div className="sub">
-            <span className="live-dot" style={{ marginRight: 6, verticalAlign: 'middle' }}></span>
-            Recovery {recoveryScore}/6 · {Math.round(hr)} bpm
+            Recovery {recoveryScore}/6
           </div>
         </div>
       </div>
@@ -214,7 +199,7 @@ function mockReply(text, score, recoveryData) {
   const R = recoveryData || window.FC_DATA.recovery;
   if (t.includes('slaap')) {
     const sleep = R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'nog niet beschikbaar';
-    return `Je slaap staat op <b>${sleep}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap: ${R.deepSleepMin ?? '–'} min. <i>Body Battery</i>: ${R.bodyBattery ?? '–'}%.`;
+    return `Je slaap staat op <b>${sleep}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap: ${R.deepSleepMin ?? '–'} min. <i>Body Battery bij ontwaken</i>: ${R.bodyBatteryAtWake ?? R.bodyBattery ?? '–'}%.`;
   }
   if (t.includes('herstel') || t.includes('recovery')) return `Herstelscore is <b>${score}/6</b>: ${recoveryLabel(score)}. ${recoveryAdvice(score)}`;
   if (t.includes('duur') || t.includes('duurloop')) return `Klaargezet. <b>75 min duurloop</b>, zone 2, doel HR 138-152. <i>FIT-bestand staat in Garmin Connect.</i>`;

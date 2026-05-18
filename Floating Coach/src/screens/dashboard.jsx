@@ -1,4 +1,4 @@
-// Dashboard — today overview + hero workout generator + live HR.
+// Dashboard — today overview + hero workout generator.
 const { useEffect: useEffectD, useState: useStateD } = React;
 const FC = window.FC_UTILS;
 
@@ -42,27 +42,6 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
   const weatherLine = weather?.temperature_c != null
     ? `${weather.location_name || 'Huidige locatie'} · ${Math.round(weather.temperature_c)}°C ${weather.condition}`
     : (weather?.source === 'unavailable' ? 'Locatie niet gedeeld' : 'Weer laden…');
-
-  // Live HR ticker
-  const [hr, setHr] = useStateD(R.currentHeartRate || D.hrStream[D.hrStream.length - 1] || 72);
-  const [hrHist, setHrHist] = useStateD((R.hrTrend && R.hrTrend.length) ? R.hrTrend : D.hrStream);
-  useEffectD(() => {
-    if (R.hrTrend && R.hrTrend.length) {
-      setHrHist(R.hrTrend);
-      setHr(R.currentHeartRate || R.hrTrend[R.hrTrend.length - 1]);
-      return undefined;
-    }
-    const t = setInterval(() => {
-      setHrHist((arr) => {
-        const last = arr[arr.length - 1];
-        const next = Math.max(58, Math.min(96, last + (Math.random() - 0.5) * 6));
-        const v = Math.round(next);
-        setHr(v);
-        return [...arr.slice(1), v];
-      });
-    }, 700);
-    return () => clearInterval(t);
-  }, [R.currentHeartRate, R.hrTrend]);
 
   // Animated clock
   const [now, setNow] = useStateD(new Date());
@@ -112,10 +91,9 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
       <HeroWorkout rec={rec} score={recoveryScore} weather={weather} onNavigate={onNavigate} />
 
       {/* Metric strip */}
-      <div className="grid-4">
-        <MetricLive label="Hartslag nu" value={Math.round(hr)} unit="bpm" hist={hrHist} live />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
         <MetricStat label="Recovery" value={recoveryScore} unit="/6" ring={ringPct} ringClass={ringClass} />
-        <MetricStat label="Body Battery" value={R.bodyBattery ?? '–'} unit={R.bodyBattery == null ? '' : "%"} sub={R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen HRV data'} />
+        <MetricStat label="Body Battery" value={R.bodyBatteryCurrent ?? R.bodyBattery ?? '–'} unit={(R.bodyBatteryCurrent ?? R.bodyBattery) == null ? '' : "%"} sub={R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen HRV data'} />
         <MetricStat label="Sleep score" value={R.sleepScore ?? '–'} unit="" sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u slaap` : 'Geen slaapdata'} />
       </div>
 
@@ -273,41 +251,6 @@ function WorkoutStrip({ type }) {
           {Math.round(total)} min
         </span>
       </div>
-    </div>
-  );
-}
-
-function MetricLive({ label, value, unit, hist, live }) {
-  // Sparkline from hist
-  const w = 240, h = 36;
-  const min = Math.min(...hist), max = Math.max(...hist);
-  const range = max - min || 1;
-  const path = hist.map((v, i) => {
-    const x = (i / (hist.length - 1)) * w;
-    const y = h - ((v - min) / range) * h;
-    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-
-  return (
-    <div className="card">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-        <span className="label">{label}</span>
-        {live && (
-          <span className="mono" style={{ fontSize: 10, color: 'var(--bad)',
-            textTransform: 'uppercase', letterSpacing: '.14em', display: 'flex',
-            alignItems: 'center', gap: 6 }}>
-            <span className="live-dot"></span> LIVE
-          </span>
-        )}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 6 }}>
-        <span className="stat-big mono">{value}</span>
-        <span className="stat-unit">{unit}</span>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none"
-           style={{ width: '100%', height: 36, marginTop: 8, display: 'block' }}>
-        <path d={path} fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
     </div>
   );
 }

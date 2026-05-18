@@ -14,7 +14,9 @@ window.FC_DATA = (() => {
     lightMin: 254,
     awakeMin: 18,
     avgStress: 31,           // 0-100
-    bodyBattery: 64,         // 0-100
+    bodyBattery: 78,         // waking Body Battery
+    bodyBatteryAtWake: 78,
+    bodyBatteryCurrent: 20,
     hrvOvernight: 58,        // ms
     restingHr: 48,
     hrvTrend: [52, 49, 55, 60, 56, 61, 58],
@@ -96,18 +98,6 @@ window.FC_DATA = (() => {
     'Toon mijn activiteiten van deze week',
   ];
 
-  // Live HR pulse stream — 60 points, ~ rolling
-  const hrStream = (() => {
-    const arr = [];
-    let v = 72;
-    for (let i = 0; i < 60; i++) {
-      v += (Math.random() - 0.5) * 6;
-      v = Math.max(58, Math.min(96, v));
-      arr.push(Math.round(v));
-    }
-    return arr;
-  })();
-
   return {
     today,
     user: { name: 'Clement', firstName: 'Clement', avatarInitials: 'CP', garminConnected: true },
@@ -120,6 +110,5 @@ window.FC_DATA = (() => {
     weeklyAnalysis,
     chatSeed,
     coachSuggestions,
-    hrStream,
   };
 })();
