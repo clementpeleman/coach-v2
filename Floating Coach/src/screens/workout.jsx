@@ -186,18 +186,17 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
       : 'Er is weinig patroondata, dus dit start van de standaardstructuur.';
     const pendingId = `workout-edit-${Date.now()}`;
     const content = [
-      'Bewerk deze training met mij.',
+      'Ik heb je huidige training erbij. Zeg gerust wat je wil wijzigen: korter, langer, rustiger, zwaarder, andere sport of andere blokken.',
       `Type: ${rec.type}. Sport: ${selectedSport.label}. Recovery: ${recoveryScore}/6. Intensiteit: ${intensityPct}%.`,
       patternText,
       '',
       ...workoutSummary,
     ].map(escapeHtml).join('<br/>');
     const pendingMessages = [
-      { id: `${pendingId}-user`, role: 'user', content, time: FCUW.fmtTime(new Date().toISOString()), source: 'workout-editor' },
       {
         id: `${pendingId}-assistant`,
         role: 'assistant',
-        content: 'Ik heb je huidige training erbij. Zeg gerust wat je wil wijzigen: korter, langer, rustiger, zwaarder, andere sport of andere blokken.',
+        content,
         time: FCUW.fmtTime(new Date().toISOString()),
         source: 'workout-editor',
       },

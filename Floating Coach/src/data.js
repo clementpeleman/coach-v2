@@ -85,9 +85,7 @@ window.FC_DATA = (() => {
 
   // Chat seed messages
   const chatSeed = [
-    { role: 'assistant', content: 'Hey, je herstelscore is <b>4/6</b>. Goede dag voor een tempotraining — wil je dat ik een sessie van 55 min klaarmaak?', time: '08:12' },
-    { role: 'user',      content: 'Doe maar, maar liever 45 min, ik moet om 19u thuis zijn.', time: '08:13' },
-    { role: 'assistant', content: 'Top. <b>2× 12 min</b> op drempel met 4 min herstel tussendoor, plus warming-up en cooling-down. <i>Klaargezet in Garmin Connect.</i>', time: '08:13' },
+    { role: 'assistant', content: 'Hey, je herstelscore is <b>4/6</b>. Goede dag voor een tempotraining — wil je dat ik een sessie van 55 min klaarmaak?', time: '08:12', source: 'seed' },
   ];
 
   // Floating coach quick suggestions

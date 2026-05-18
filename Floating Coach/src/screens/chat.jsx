@@ -18,6 +18,7 @@ function ChatScreen({
   );
   const recentActivity = activitiesQuery.data.activities?.[0] || D.activities[0];
   const messages = chatMessages || D.chatSeed;
+  const hasUserMessages = messages.some((message) => message.role === 'user');
   const setMessages = setChatMessages;
   const thinking = chatThinking;
   const setThinking = setChatThinking;
@@ -180,16 +181,31 @@ function ChatScreen({
           )}
         </div>
 
-        {/* Quick prompts */}
-        {messages.length < 3 && (
-          <div style={{ padding: '0 28px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {D.coachSuggestions.map((s) => (
-              <button key={s} onClick={() => send(s)} className="tag"
-                style={{ border: '1px solid var(--line)', background: 'transparent',
-                  cursor: 'pointer', padding: '8px 14px', fontSize: 12 }}>
-                {s}
-              </button>
-            ))}
+        {/* Example prompts */}
+        {!hasUserMessages && !thinking && (
+          <div style={{ padding: '0 28px 16px' }}>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
+              textTransform: 'uppercase', letterSpacing: '.14em', marginBottom: 9 }}>
+              Voorbeelden
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {D.coachSuggestions.map((s) => (
+                <button key={s} onClick={() => send(s)}
+                  style={{
+                    border: '1px solid var(--line)',
+                    background: 'var(--bg-soft)',
+                    color: 'var(--ink)',
+                    cursor: 'pointer',
+                    padding: '10px 14px',
+                    borderRadius: 18,
+                    fontSize: 13,
+                    fontFamily: 'inherit',
+                    lineHeight: 1.25,
+                  }}>
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -212,7 +228,7 @@ function ChatScreen({
       </div>
 
       {/* Side context column */}
-      <div className="col" style={{ gap: 16 }}>
+      <div className="col" style={{ gap: 16, alignSelf: 'start' }}>
         <TrainingProposalCard
           draftWorkout={draftWorkout}
           setDraftWorkout={setDraftWorkout}
@@ -300,7 +316,14 @@ function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recov
   };
 
   return (
-    <div className="card tight" style={{ background: 'var(--ink)', color: '#fff', borderColor: 'transparent' }}>
+    <div className="card tight" style={{
+      background: 'var(--ink)',
+      color: '#fff',
+      borderColor: 'transparent',
+      position: 'sticky',
+      top: 18,
+      zIndex: 5,
+    }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
         <div>
           <div className="label" style={{ color: 'oklch(70% 0.01 100)', marginBottom: 8 }}>Trainingvoorstel</div>

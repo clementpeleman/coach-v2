@@ -311,6 +311,7 @@ function readStoredChat(key) {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(key) || 'null');
     if (Array.isArray(parsed) && parsed.length) {
+      if (isLegacyDemoChat(parsed)) return window.FC_DATA.chatSeed;
       return parsed
         .filter((m) => m && typeof m.role === 'string' && typeof m.content === 'string')
         .map((m) => ({
@@ -322,6 +323,17 @@ function readStoredChat(key) {
     }
   } catch (_) {}
   return window.FC_DATA.chatSeed;
+}
+
+function isLegacyDemoChat(messages) {
+  const legacyUserText = 'Doe maar, maar liever 45 min, ik moet om 19u thuis zijn.';
+  const legacyAssistantText = 'Top. <b>2× 12 min</b> op drempel met 4 min herstel tussendoor, plus warming-up en cooling-down. <i>Klaargezet in Garmin Connect.</i>';
+  return messages.length === 3
+    && messages[0]?.role === 'assistant'
+    && messages[1]?.role === 'user'
+    && messages[1]?.content === legacyUserText
+    && messages[2]?.role === 'assistant'
+    && messages[2]?.content === legacyAssistantText;
 }
 
 function appendUniqueChatMessages(messages, additions) {
