@@ -3,8 +3,9 @@ const { useState: useStateC, useEffect: useEffectC, useRef: useRefC } = React;
 const FCU = window.FC_UTILS;
 
 function ChatScreen({
-  recoveryScore, recoveryData, weather, apiStatus, userId,
+  recoveryScore, recoveryData, weather, apiStatus, userId, onNavigate,
   trainingProfile, chatMessages, setChatMessages, chatThinking, setChatThinking, resetChat,
+  draftWorkout, setDraftWorkout,
 }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
@@ -23,6 +24,13 @@ function ChatScreen({
   const [draft, setDraft] = useStateC('');
   const [lastError, setLastError] = useStateC(null);
   const scrollRef = useRefC(null);
+  const commitDraftWorkout = (updater) => {
+    if (setDraftWorkout) {
+      setDraftWorkout(updater);
+      return;
+    }
+    window.FC_SET_DRAFT_WORKOUT?.(updater);
+  };
 
   useEffectC(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -48,6 +56,14 @@ function ChatScreen({
   const send = async (text) => {
     const t = (text || draft).trim();
     if (!t) return;
+    let draftUpdate = null;
+    if (window.FC_WORKOUT_PLAN) {
+      commitDraftWorkout((current) => {
+        const result = window.FC_WORKOUT_PLAN.updateDraftFromText(current || draftWorkout, t, { recoveryScore, trainingProfile });
+        draftUpdate = result;
+        return result.changed ? result.draft : (current || result.draft);
+      });
+    }
     const nextHistory = [...messages, { role: 'user', content: t, time: FCU.fmtTime(new Date().toISOString()) }];
     setMessages(nextHistory);
     setDraft('');
@@ -70,6 +86,7 @@ function ChatScreen({
               metrics: R,
             },
             workout_patterns: trainingProfile?.workout_patterns || null,
+            draft_workout: draftUpdate?.draft || draftWorkout || null,
           },
         });
         setMessages((m) => [...m, {
@@ -92,9 +109,12 @@ function ChatScreen({
 
     // Offline / no user: scripted reply.
     setTimeout(() => {
+      const adjustmentNote = draftUpdate?.changed
+        ? `<br/><br/><i>${draftUpdate.summary || 'Trainingvoorstel aangepast.'}</i>`
+        : '';
       setMessages((m) => [...m, {
         role: 'assistant',
-        content: mockReplyChat(t, recoveryScore, R),
+        content: `${mockReplyChat(t, recoveryScore, R)}${adjustmentNote}`,
         time: FCU.fmtTime(new Date().toISOString()),
         source: 'demo',
       }]);
@@ -104,7 +124,7 @@ function ChatScreen({
 
   return (
     <div data-screen-label="Coach chat" style={{ display: 'grid',
-        gridTemplateColumns: '1fr 320px', gap: 24, minHeight: 'calc(100vh - 90px)' }}>
+        gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: 24, minHeight: 'calc(100vh - 90px)' }}>
       {/* Chat column */}
       <div className="card" style={{ display: 'flex', flexDirection: 'column',
           padding: 0, overflow: 'hidden' }}>
@@ -193,6 +213,14 @@ function ChatScreen({
 
       {/* Side context column */}
       <div className="col" style={{ gap: 16 }}>
+        <TrainingProposalCard
+          draftWorkout={draftWorkout}
+          setDraftWorkout={setDraftWorkout}
+          onNavigate={onNavigate}
+          recoveryScore={recoveryScore}
+          trainingProfile={trainingProfile}
+        />
+
         <div className="card tight">
           <div className="label" style={{ marginBottom: 12 }}>Coach toolkit</div>
           {['Genereer workout', 'Analyseer trainingsweek', 'Herstel check', 'Vergelijk activiteiten', 'Plan een wedstrijd'].map((t) => (
@@ -236,6 +264,115 @@ function ChatScreen({
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recoveryScore, trainingProfile }) {
+  const plan = draftWorkout || window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore, trainingProfile });
+  if (!plan || !window.FC_WORKOUT_PLAN) return null;
+  const totalSec = (plan.blocks || []).reduce((sum, block) => sum + block.sec, 0);
+  const totalMin = Math.round(totalSec / 60) || plan.durationMin;
+  const sportLabel = window.FC_WORKOUT_PLAN.sportLabel(plan.sportType);
+  const typeLabel = window.FC_WORKOUT_PLAN.typeLabel(plan.type);
+  const mainBlock = (plan.blocks || []).find((block) => block.zone !== 'Z1') || (plan.blocks || [])[0];
+  const mainTarget = mainBlock ? window.FC_WORKOUT_PLAN.targetForBlock(mainBlock, plan.sportType) : null;
+  const statusText = plan.status === 'approved' ? 'Goedgekeurd' : 'Concept';
+
+  const commitDraftWorkout = (updater) => {
+    if (setDraftWorkout) {
+      setDraftWorkout(updater);
+      return;
+    }
+    window.FC_SET_DRAFT_WORKOUT?.(updater);
+  };
+
+  const approve = () => {
+    commitDraftWorkout((current) => window.FC_WORKOUT_PLAN.approveDraft(current || plan));
+  };
+
+  const quickAdjust = (text) => {
+    commitDraftWorkout((current) => (
+      window.FC_WORKOUT_PLAN.updateDraftFromText(current || plan, text, { recoveryScore, trainingProfile }).draft
+    ));
+  };
+
+  return (
+    <div className="card tight" style={{ background: 'var(--ink)', color: '#fff', borderColor: 'transparent' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
+        <div>
+          <div className="label" style={{ color: 'oklch(70% 0.01 100)', marginBottom: 8 }}>Trainingvoorstel</div>
+          <h2 style={{ color: '#fff', lineHeight: 1.15 }}>{typeLabel}</h2>
+        </div>
+        <span className={plan.status === 'approved' ? 'tag accent' : 'tag'}
+          style={plan.status === 'approved' ? undefined : { background: 'oklch(24% 0.005 100)', color: 'oklch(78% 0.01 100)' }}>
+          {statusText}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginTop: 16 }}>
+        <ProposalMetric label="Sport" value={sportLabel} />
+        <ProposalMetric label="Duur" value={`${totalMin}m`} />
+        <ProposalMetric label="Intens." value={`${plan.intensityPct || 100}%`} />
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', gap: 3, height: 34 }}>
+          {(plan.blocks || []).map((block, index) => (
+            <div key={`${block.label}-${index}`}
+              title={`${block.label} · ${Math.round(block.sec / 60)} min`}
+              style={{
+                flex: Math.max(0.02, block.sec / Math.max(1, totalSec)),
+                background: block.color || 'var(--accent)',
+                borderRadius: 3,
+                opacity: block.zone === 'Z1' ? .65 : 1,
+              }} />
+          ))}
+        </div>
+        <div className="mono" style={{ marginTop: 8, fontSize: 10, color: 'oklch(74% 0.01 100)', lineHeight: 1.45 }}>
+          {mainBlock
+            ? `${mainBlock.label} · ${Math.round(mainBlock.sec / 60)} min · ${mainBlock.zone}${mainTarget ? ` · ${mainTarget}` : ''}`
+            : 'Nog geen blokken'}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 14 }}>
+        <button className="btn ghost" onClick={() => quickAdjust('korter')}
+          style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '8px 10px' }}>
+          Korter
+        </button>
+        <button className="btn ghost" onClick={() => quickAdjust('rustiger')}
+          style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '8px 10px' }}>
+          Rustiger
+        </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
+        <button className="btn accent" onClick={approve} style={{ justifyContent: 'center', padding: '11px 12px' }}>
+          Goedkeuren
+        </button>
+        <button className="btn ghost" onClick={() => onNavigate?.('workout')}
+          style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '11px 12px' }}>
+          Open plan
+        </button>
+      </div>
+
+      <p style={{ margin: '12px 0 0', color: 'oklch(78% 0.01 100)', fontSize: 12, lineHeight: 1.45 }}>
+        {plan.note || 'Vraag iets zoals “maak hem 45 min”, “op de fiets” of “rustiger”.'}
+      </p>
+    </div>
+  );
+}
+
+function ProposalMetric({ label, value }) {
+  return (
+    <div style={{ background: 'oklch(18% 0.005 100)', borderRadius: 10, padding: '10px 8px', minWidth: 0 }}>
+      <div className="mono" style={{ fontSize: 9, color: 'oklch(66% 0.01 100)', textTransform: 'uppercase', letterSpacing: '.12em' }}>
+        {label}
+      </div>
+      <div style={{ marginTop: 5, fontSize: 14, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {value}
       </div>
     </div>
   );

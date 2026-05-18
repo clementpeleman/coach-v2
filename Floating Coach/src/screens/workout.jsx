@@ -18,7 +18,7 @@ const SPORT_DURATION_MINUTES = {
   SWIMMING: { HERSTEL: 28, DUUR: 42, THRESHOLD: 38, VO2MAX: 34, SPRINT: 30 },
 };
 
-function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingProfile, setChatMessages, setChatThinking }) {
+function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingProfile, setChatMessages, setChatThinking, draftWorkout, setDraftWorkout }) {
   const D = window.FC_DATA;
   const online = apiStatus === 'online';
   const activityQuery = window.useLiveData(
@@ -36,14 +36,23 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const profileData = trainingProfile || trainingProfileQuery.data;
   const latestActivity = activityQuery.data.activities?.[0];
   const deviceName = latestActivity?.raw_data?.deviceName || latestActivity?.device_name || 'Garmin Connect';
-  const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
+  const baseRec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
+  const rec = draftWorkout
+    ? {
+        ...baseRec,
+        type: draftWorkout.type || baseRec.type,
+        dutch: window.FC_WORKOUT_PLAN?.typeLabel(draftWorkout.type) || baseRec.dutch,
+        sport: window.FC_WORKOUT_PLAN?.sportLabel(draftWorkout.sportType) || baseRec.sport,
+        duration: draftWorkout.durationMin || baseRec.duration,
+      }
+    : baseRec;
   const patternForType = profileData.workout_patterns?.by_type?.[rec.type];
   const patternSport = patternForType?.preferred_sport;
   const patternSportKey = patternSport && SPORT_OPTIONS.some((sport) => sport.key === patternSport)
     ? patternSport
     : null;
 
-  const [sportType, setSportType] = useStateW(sportFromRecommendation(rec.sport));
+  const [sportType, setSportType] = useStateW(draftWorkout?.sportType || sportFromRecommendation(rec.sport));
   const [sportTouched, setSportTouched] = useStateW(false);
   const [targetMode, setTargetMode] = useStateW('pace');
   const [intensityPct, setIntensityPct] = useStateW(100);
@@ -53,6 +62,11 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   useEffectW(() => {
     if (!sportTouched && patternSportKey) setSportType(patternSportKey);
   }, [patternSportKey, sportTouched]);
+  useEffectW(() => {
+    if (!draftWorkout?.sportType) return;
+    setSportType(draftWorkout.sportType);
+    if (draftWorkout.intensityPct) setIntensityPct(draftWorkout.intensityPct);
+  }, [draftWorkout?.updatedAt]);
 
   const selectedSport = SPORT_OPTIONS.find((sport) => sport.key === sportType) || SPORT_OPTIONS[1];
   const personalSportProfile = profileData.personal_targets?.[sportType];
@@ -60,17 +74,28 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const detailSegments = personalSportProfile?.detail_segments || 0;
   const primaryTargetLabel = selectedSport.targetLabel;
   const primaryTargetText = selectedSport.targetText;
-  const plannedDuration = plannedDurationForSport(rec, sportType, patternForType);
+  const draftMatchesSportAndType = draftWorkout?.type === rec.type && draftWorkout?.sportType === sportType;
+  const plannedDuration = draftMatchesSportAndType && draftWorkout?.durationMin
+    ? draftWorkout.durationMin
+    : plannedDurationForSport(rec, sportType, patternForType);
   const patternMatchesSelectedSport = Boolean(patternForType && (!patternForType.preferred_sport || patternForType.preferred_sport === sportType));
-  const durationSource = patternForType?.typical_duration_min && patternMatchesSelectedSport ? 'patroonduur' : 'sportduur';
+  const durationSource = draftMatchesSportAndType && draftWorkout?.durationMin
+    ? 'coachvoorstel'
+    : (patternForType?.typical_duration_min && patternMatchesSelectedSport ? 'patroonduur' : 'sportduur');
   const structurePattern = patternMatchesSelectedSport ? patternForType : null;
-  const baseBlocks = buildStructure(rec.type, sportType, personalSportProfile, structurePattern);
-  const defaultBlocks = fitBlocksToDuration(baseBlocks, plannedDuration);
+  const draftMatchesView = draftMatchesSportAndType
+    && Array.isArray(draftWorkout?.blocks)
+    && draftWorkout.blocks.length > 0;
+  const baseBlocks = draftMatchesView
+    ? draftWorkout.blocks
+    : buildStructure(rec.type, sportType, personalSportProfile, structurePattern);
+  const defaultBlocks = draftMatchesView ? baseBlocks : fitBlocksToDuration(baseBlocks, plannedDuration);
   const defaultBlocksKey = [
     rec.type,
     sportType,
     structurePattern?.typical_structure || 'default',
     plannedDuration,
+    draftWorkout?.updatedAt || 'no-draft',
     personalSportProfile?.sessions || 0,
     detailSegments,
   ].join('|');
@@ -105,9 +130,11 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const updateSelectedBlock = (patch) => {
     setEditedBlocks((current) => {
       const source = current.length ? current : blocks;
-      return source.map((block, index) => (
+      const nextBlocks = source.map((block, index) => (
         index === selectedBlockIndex ? { ...block, ...patch } : block
       ));
+      publishDraftWorkout(nextBlocks);
+      return nextBlocks;
     });
     setManualEdits(true);
   };
@@ -125,9 +152,29 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
     updateSelectedBlock(selectedSport.metric === 'speed' ? { speed: metricValue } : { pace: metricValue });
   };
   const resetBlocks = () => {
-    setEditedBlocks(defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index)));
+    const nextBlocks = defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index));
+    setEditedBlocks(nextBlocks);
+    publishDraftWorkout(nextBlocks, { status: 'draft', note: 'Teruggezet naar het huidige voorstel.' });
     setSelectedBlockIndex(0);
     setManualEdits(false);
+  };
+  const publishDraftWorkout = (nextBlocks, patch = {}) => {
+    if (!setDraftWorkout) return;
+    const durationMin = Math.round(nextBlocks.reduce((sum, block) => sum + block.sec, 0) / 60);
+    setDraftWorkout((current) => ({
+      ...(current || {}),
+      id: current?.id || `draft-${Date.now()}`,
+      type: rec.type,
+      sportType,
+      durationMin,
+      intensityPct,
+      blocks: nextBlocks,
+      status: 'draft',
+      source: 'workout-editor',
+      note: 'Handmatig aangepast in de workout-editor.',
+      updatedAt: new Date().toISOString(),
+      ...patch,
+    }));
   };
   const openCoachEditor = () => {
     const workoutSummary = adjustedBlocks.map((block, index) => {
@@ -275,7 +322,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               {personalSportProfile
                 ? `Persoonlijk profiel · ${personalSportProfile.sessions} sessies · ${detailSegments} detailsegmenten · vertrouwen ${personalConfidence}`
                 : 'Fallback targets · nog te weinig sportdata'}
-              {` · ${durationSource === 'patroonduur' ? 'duur uit je sportpatroon' : `${selectedSport.label.toLowerCase()}-duur ${plannedDuration} min`}`}
+              {` · ${durationSource === 'coachvoorstel' ? 'duur uit coachvoorstel' : durationSource === 'patroonduur' ? 'duur uit je sportpatroon' : `${selectedSport.label.toLowerCase()}-duur ${plannedDuration} min`}`}
               {structurePattern && ` · patroon ${structurePattern.typical_structure || 'continu'}`}
             </div>
           </div>
@@ -588,6 +635,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               {structurePattern
                 ? ` Structuur gebaseerd op je typische ${rec.type.toLowerCase()}-sessies: ${structurePattern.typical_structure || 'continu'}, meestal ${sportLabelFromKey(structurePattern.preferred_sport)}.`
                 : ' Voor de workoutstructuur gebruik ik de standaardopbouw omdat er nog weinig patroondata is.'}
+              {durationSource === 'coachvoorstel' && ' De duur komt uit het goedgekeurde coachvoorstel.'}
               {durationSource === 'sportduur' && ` De duur is sport-specifiek geschaald voor ${selectedSport.label.toLowerCase()}.`}
               {' '}Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>

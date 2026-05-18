@@ -16,6 +16,9 @@ function App() {
   const recoveryScore = recoverySnapshot?.score ?? DEFAULT_RECOVERY;
   const [chatMessages, setChatMessages] = useStateApp(() => readStoredChat(chatStorageKey));
   const [chatThinking, setChatThinking] = useStateApp(false);
+  const [draftWorkout, setDraftWorkout] = useStateApp(() => (
+    window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore: DEFAULT_RECOVERY, trainingProfile: null })
+  ));
   const resetChat = () => {
     setChatMessages(window.FC_DATA.chatSeed);
     setChatThinking(false);
@@ -62,6 +65,18 @@ function App() {
       window.localStorage.setItem(chatStorageKey, JSON.stringify(chatMessages.slice(-80)));
     } catch (_) {}
   }, [chatStorageKey, chatMessages]);
+
+  useEffectApp(() => {
+    if (!window.FC_WORKOUT_PLAN) return;
+    setDraftWorkout((current) => current || window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore, trainingProfile }));
+  }, [recoveryScore, trainingProfile]);
+
+  useEffectApp(() => {
+    window.FC_SET_DRAFT_WORKOUT = (updater) => setDraftWorkout(updater);
+    return () => {
+      if (window.FC_SET_DRAFT_WORKOUT) delete window.FC_SET_DRAFT_WORKOUT;
+    };
+  }, []);
 
   useEffectApp(() => {
     const openCoachWithMessages = (messagesOrEvent) => {
@@ -167,6 +182,8 @@ function App() {
     chatThinking,
     setChatThinking,
     resetChat,
+    draftWorkout,
+    setDraftWorkout,
   };
 
   const userName = profile?.display_name || profile?.email || window.FC_DATA.user.name;
@@ -279,6 +296,8 @@ function App() {
                           apiStatus={apiStatus.status}
                           userId={session.userId}
                           trainingProfile={trainingProfile}
+                          draftWorkout={draftWorkout}
+                          setDraftWorkout={setDraftWorkout}
                           messages={chatMessages}
                           setMessages={setChatMessages}
                           thinking={chatThinking}
