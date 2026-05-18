@@ -13,7 +13,11 @@ function App() {
   const [trainingProfile, setTrainingProfile] = useStateApp(null);
   const chatStorageKey = `fc_chat_messages_v1_${session.userId || 'demo'}`;
   const recoveryMetrics = recoverySnapshot?.metrics || window.FC_DATA.recovery;
-  const recoveryScore = recoverySnapshot?.score ?? DEFAULT_RECOVERY;
+  const recoveryScore = currentReadinessScore(
+    recoverySnapshot?.score ?? DEFAULT_RECOVERY,
+    recoveryMetrics,
+    recoverySnapshot?.source === 'live',
+  );
   const [chatMessages, setChatMessages] = useStateApp(() => readStoredChat(chatStorageKey));
   const [chatThinking, setChatThinking] = useStateApp(false);
   const [draftWorkout, setDraftWorkout] = useStateApp(() => (
@@ -349,6 +353,23 @@ function isLegacyDemoChat(messages) {
     && messages[1]?.content === legacyUserText
     && messages[2]?.role === 'assistant'
     && messages[2]?.content === legacyAssistantText;
+}
+
+function currentReadinessScore(score, metrics, live) {
+  if (!live || !metrics || score == null) return score;
+  let adjusted = score;
+  const currentBattery = metrics.bodyBatteryCurrent ?? metrics.bodyBattery;
+  const trainingPenalty = metrics.recentTrainingPenalty || 0;
+
+  if (currentBattery != null) {
+    if (currentBattery <= 15) adjusted = Math.min(adjusted, 2);
+    else if (currentBattery <= 25) adjusted = Math.min(adjusted, 3);
+    else if (currentBattery <= 35 && trainingPenalty >= 0.8) adjusted = Math.min(adjusted, 3);
+  }
+  if (trainingPenalty >= 1.1) adjusted = Math.min(adjusted, 3);
+  if (trainingPenalty >= 1.1 && currentBattery != null && currentBattery <= 25) adjusted = Math.min(adjusted, 2);
+
+  return adjusted;
 }
 
 function appendUniqueChatMessages(messages, additions) {

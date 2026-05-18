@@ -1540,7 +1540,24 @@ def _recovery_score(
 
     score -= recent_training_penalty
 
-    return max(0, min(6, int(round(score))))
+    rounded = max(0, min(6, int(round(score))))
+
+    # This score answers "how ready am I right now?", not only "how well did I wake up?".
+    # Very low current Body Battery and recent hard sessions should block hard training.
+    if body_battery is not None:
+        if body_battery <= 15:
+            rounded = min(rounded, 2)
+        elif body_battery <= 25:
+            rounded = min(rounded, 3)
+        elif body_battery <= 35 and recent_training_penalty >= 0.8:
+            rounded = min(rounded, 3)
+
+    if recent_training_penalty >= 1.1:
+        rounded = min(rounded, 3)
+    if recent_training_penalty >= 1.1 and body_battery is not None and body_battery <= 25:
+        rounded = min(rounded, 2)
+
+    return rounded
 
 
 def build_weekly_summary(
@@ -2162,9 +2179,9 @@ async def get_recovery_snapshot(
         body_battery_at_wake = _body_battery_at_wake(stress, sleep)
         body_battery_current = round(body_battery_values[-1]) if body_battery_values else None
         body_battery_for_score = (
-            body_battery_at_wake
-            if body_battery_at_wake is not None
-            else body_battery_current
+            body_battery_current
+            if body_battery_current is not None
+            else body_battery_at_wake
         )
         hrv_overnight = (
             int(hrv.get("lastNightAvg"))
@@ -2200,8 +2217,9 @@ async def get_recovery_snapshot(
                 "version": "health_plus_recent_training_v1",
                 "scale": "0-6",
                 "notes": [
-                    "Health signals use sleep, stress, Body Battery and HRV.",
+                    "Health signals use sleep, stress, current Body Battery and HRV.",
                     "Recent training reduces the score for 48h based on duration and heart-rate intensity.",
+                    "Very low current Body Battery caps readiness even after a good night of sleep.",
                 ],
             },
             "metrics": {
