@@ -10,6 +10,14 @@ const SPORT_OPTIONS = [
   { key: 'SWIMMING', label: 'Zwemmen', shortLabel: 'Zwem', garminType: 'LAP_SWIMMING', metric: 'pace', targetLabel: 'Tempo', targetText: 'zwemtempo' },
 ];
 
+const SPORT_DURATION_MINUTES = {
+  WALKING: { HERSTEL: 45, DUUR: 70, THRESHOLD: 50, VO2MAX: 42, SPRINT: 35 },
+  RUNNING: { HERSTEL: 40, DUUR: 60, THRESHOLD: 46, VO2MAX: 54, SPRINT: 37 },
+  CYCLING: { HERSTEL: 55, DUUR: 95, THRESHOLD: 72, VO2MAX: 62, SPRINT: 48 },
+  INDOOR_CYCLING: { HERSTEL: 45, DUUR: 75, THRESHOLD: 60, VO2MAX: 52, SPRINT: 40 },
+  SWIMMING: { HERSTEL: 28, DUUR: 42, THRESHOLD: 38, VO2MAX: 34, SPRINT: 30 },
+};
+
 function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingProfile, setChatMessages, setChatThinking }) {
   const D = window.FC_DATA;
   const online = apiStatus === 'online';
@@ -34,7 +42,6 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const patternSportKey = patternSport && SPORT_OPTIONS.some((sport) => sport.key === patternSport)
     ? patternSport
     : null;
-  const plannedDuration = patternForType?.typical_duration_min || rec.duration;
 
   const [sportType, setSportType] = useStateW(sportFromRecommendation(rec.sport));
   const [sportTouched, setSportTouched] = useStateW(false);
@@ -53,15 +60,17 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const detailSegments = personalSportProfile?.detail_segments || 0;
   const primaryTargetLabel = selectedSport.targetLabel;
   const primaryTargetText = selectedSport.targetText;
-  const baseBlocks = buildStructure(rec.type, sportType, personalSportProfile, patternForType);
-  const defaultBlocks = patternForType?.typical_duration_min
-    ? fitBlocksToDuration(baseBlocks, plannedDuration)
-    : baseBlocks;
+  const plannedDuration = plannedDurationForSport(rec, sportType, patternForType);
+  const patternMatchesSelectedSport = Boolean(patternForType && (!patternForType.preferred_sport || patternForType.preferred_sport === sportType));
+  const durationSource = patternForType?.typical_duration_min && patternMatchesSelectedSport ? 'patroonduur' : 'sportduur';
+  const structurePattern = patternMatchesSelectedSport ? patternForType : null;
+  const baseBlocks = buildStructure(rec.type, sportType, personalSportProfile, structurePattern);
+  const defaultBlocks = fitBlocksToDuration(baseBlocks, plannedDuration);
   const defaultBlocksKey = [
     rec.type,
     sportType,
-    patternForType?.typical_structure || 'default',
-    patternForType?.typical_duration_min || 'default',
+    structurePattern?.typical_structure || 'default',
+    plannedDuration,
     personalSportProfile?.sessions || 0,
     detailSegments,
   ].join('|');
@@ -72,6 +81,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   }, [defaultBlocksKey]);
   const blocks = editedBlocks.length ? editedBlocks : defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index));
   const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
+  const estimatedCalories = Math.round((totalSec / 60) * calorieRateForSport(sportType));
+  const estimatedTss = Math.round((totalSec / 60) * tssRateForSport(sportType, rec.type));
   const adjustedBlocks = blocks.map((block) => ({
     ...block,
     adjustedHr: adjustHrRange(block.hr, intensityPct),
@@ -88,6 +99,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   ) || 'vrij';
   const selectedBlock = blocks[Math.min(selectedBlockIndex, blocks.length - 1)] || blocks[0];
   const selectedAdjustedBlock = adjustedBlocks[Math.min(selectedBlockIndex, adjustedBlocks.length - 1)] || adjustedBlocks[0];
+  const selectedMetricValue = selectedSport.metric === 'speed' ? (selectedBlock?.speed || '') : (selectedBlock?.pace || '');
+  const selectedMetricParts = splitMetricRange(selectedMetricValue);
+  const selectedMetricUnit = metricUnitForSport(sportType);
   const updateSelectedBlock = (patch) => {
     setEditedBlocks((current) => {
       const source = current.length ? current : blocks;
@@ -104,6 +118,12 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const adjustSelectedDuration = (deltaMin) => {
     updateSelectedDuration(Math.round((selectedBlock?.sec || 60) / 60) + deltaMin);
   };
+  const updateSelectedMetricRange = (field, value) => {
+    const current = splitMetricRange(selectedSport.metric === 'speed' ? selectedBlock?.speed : selectedBlock?.pace);
+    const next = { ...current, [field]: sanitizeMetricInput(value, selectedSport.metric) };
+    const metricValue = composeMetricRange(next.min, next.max, sportType);
+    updateSelectedBlock(selectedSport.metric === 'speed' ? { speed: metricValue } : { pace: metricValue });
+  };
   const resetBlocks = () => {
     setEditedBlocks(defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index)));
     setSelectedBlockIndex(0);
@@ -114,8 +134,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
       const primary = selectedSport.metric === 'speed' ? block.adjustedSpeed : block.adjustedPace;
       return `${index + 1}. ${block.label}: ${Math.round(block.sec / 60)} min, ${block.zone}, ${primaryTargetLabel} ${primary || 'vrij'}, HR ${block.adjustedHr || 'vrij'}`;
     });
-    const patternText = patternForType
-      ? `Gebaseerd op je patroon voor ${rec.type}: ${patternForType.typical_structure || 'continu'}, meestal ${sportLabelFromKey(patternForType.preferred_sport)}.`
+    const patternText = structurePattern
+      ? `Gebaseerd op je patroon voor ${rec.type}: ${structurePattern.typical_structure || 'continu'}, meestal ${sportLabelFromKey(structurePattern.preferred_sport)}.`
       : 'Er is weinig patroondata, dus dit start van de standaardstructuur.';
     const pendingId = `workout-edit-${Date.now()}`;
     const content = [
@@ -255,7 +275,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               {personalSportProfile
                 ? `Persoonlijk profiel · ${personalSportProfile.sessions} sessies · ${detailSegments} detailsegmenten · vertrouwen ${personalConfidence}`
                 : 'Fallback targets · nog te weinig sportdata'}
-              {patternForType && ` · patroon ${patternForType.typical_structure || 'continu'}`}
+              {` · ${durationSource === 'patroonduur' ? 'duur uit je sportpatroon' : `${selectedSport.label.toLowerCase()}-duur ${plannedDuration} min`}`}
+              {structurePattern && ` · patroon ${structurePattern.typical_structure || 'continu'}`}
             </div>
           </div>
 
@@ -391,21 +412,29 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                     textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
                     {primaryTargetLabel}
                   </span>
-                  <input value={selectedSport.metric === 'speed' ? (selectedBlock.speed || '') : (selectedBlock.pace || '')}
-                    onChange={(e) => updateSelectedBlock(selectedSport.metric === 'speed'
-                      ? { speed: e.target.value }
-                      : { pace: e.target.value })}
-                    placeholder={selectedSport.metric === 'speed' ? '24-28 km/u' : '5:55-6:35/km'}
-                    style={{
-                      width: '100%',
-                      boxSizing: 'border-box',
-                      border: '1px solid oklch(36% 0.005 100)',
-                      background: 'oklch(18% 0.005 100)',
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto', gap: 6, alignItems: 'center' }}>
+                    <input value={selectedMetricParts.min}
+                      inputMode={selectedSport.metric === 'speed' ? 'decimal' : 'text'}
+                      onChange={(e) => updateSelectedMetricRange('min', e.target.value)}
+                      placeholder={metricPlaceholder(sportType, 'min')}
+                      style={metricInputStyle()} />
+                    <span className="mono" style={{ color: 'oklch(70% 0.01 100)', fontSize: 12 }}>tot</span>
+                    <input value={selectedMetricParts.max}
+                      inputMode={selectedSport.metric === 'speed' ? 'decimal' : 'text'}
+                      onChange={(e) => updateSelectedMetricRange('max', e.target.value)}
+                      placeholder={metricPlaceholder(sportType, 'max')}
+                      style={metricInputStyle()} />
+                    <span className="mono" style={{
                       color: '#fff',
-                      borderRadius: 10,
-                      padding: '10px 12px',
-                      fontSize: 14,
-                    }} />
+                      border: '1px solid oklch(36% 0.005 100)',
+                      borderRadius: 999,
+                      padding: '7px 9px',
+                      fontSize: 10,
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {selectedMetricUnit}
+                    </span>
+                  </div>
                 </label>
                 <label>
                   <span className="mono" style={{ display: 'block', fontSize: 9, color: 'oklch(70% 0.01 100)',
@@ -459,8 +488,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
       {/* 3-col details */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
         <SmallStat label="Sessie duur" value={`${Math.round(totalSec / 60)}`} unit="min" />
-        <SmallStat label="Geschatte calorieën" value={`${Math.round((totalSec / 60) * 11)}`} unit="kcal" />
-        <SmallStat label="Verwachte TSS" value={`${Math.round((totalSec / 60) * 0.8)}`} unit="" />
+        <SmallStat label="Geschatte calorieën" value={`${estimatedCalories}`} unit="kcal" />
+        <SmallStat label="Verwachte TSS" value={`${estimatedTss}`} unit="" />
       </div>
 
       {/* Step list + side */}
@@ -556,9 +585,10 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               {personalSportProfile
                 ? ` Targets zijn geleerd uit je laatste ${personalSportProfile.sessions} ${selectedSport.label.toLowerCase()}-sessies${detailSegments ? ` en ${detailSegments} detailsegmenten` : ''}.`
                 : ' Ik gebruik voorlopig ruime standaardtargets tot er meer sessies binnen zijn.'}
-              {patternForType
-                ? ` Structuur gebaseerd op je typische ${rec.type.toLowerCase()}-sessies: ${patternForType.typical_structure || 'continu'}, meestal ${sportLabelFromKey(patternForType.preferred_sport)}.`
+              {structurePattern
+                ? ` Structuur gebaseerd op je typische ${rec.type.toLowerCase()}-sessies: ${structurePattern.typical_structure || 'continu'}, meestal ${sportLabelFromKey(structurePattern.preferred_sport)}.`
                 : ' Voor de workoutstructuur gebruik ik de standaardopbouw omdat er nog weinig patroondata is.'}
+              {durationSource === 'sportduur' && ` De duur is sport-specifiek geschaald voor ${selectedSport.label.toLowerCase()}.`}
               {' '}Pas de slider aan als je vandaag iets conservatiever of scherper wil trainen.
             </p>
             <div style={{ marginTop: 14, display: 'flex', gap: 6 }}>
@@ -595,6 +625,50 @@ function SmallStat({ label, value, unit }) {
       </div>
     </div>
   );
+}
+
+function metricInputStyle() {
+  return {
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
+    border: '1px solid oklch(36% 0.005 100)',
+    background: 'oklch(18% 0.005 100)',
+    color: '#fff',
+    borderRadius: 10,
+    padding: '10px 9px',
+    fontSize: 14,
+    textAlign: 'center',
+  };
+}
+
+function calorieRateForSport(sportType) {
+  const rates = {
+    WALKING: 4.5,
+    RUNNING: 11,
+    CYCLING: 8,
+    INDOOR_CYCLING: 8.5,
+    SWIMMING: 9.5,
+  };
+  return rates[sportType] || rates.RUNNING;
+}
+
+function tssRateForSport(sportType, workoutType) {
+  const base = {
+    WALKING: 0.35,
+    RUNNING: 0.8,
+    CYCLING: 0.62,
+    INDOOR_CYCLING: 0.7,
+    SWIMMING: 0.72,
+  }[sportType] || 0.8;
+  const multiplier = {
+    HERSTEL: 0.65,
+    DUUR: 0.9,
+    THRESHOLD: 1,
+    VO2MAX: 1.1,
+    SPRINT: 1,
+  }[workoutType] || 1;
+  return base * multiplier;
 }
 
 function adjustHrRange(range, pct) {
@@ -649,6 +723,12 @@ function sportLabelFromKey(key) {
   return (SPORT_OPTIONS.find((sport) => sport.key === key)?.label || key || 'deze sport').toLowerCase();
 }
 
+function plannedDurationForSport(rec, sportType, pattern) {
+  const sportDefault = SPORT_DURATION_MINUTES[sportType]?.[rec.type] || rec.duration;
+  const patternMatchesSport = pattern?.typical_duration_min && (!pattern.preferred_sport || pattern.preferred_sport === sportType);
+  return patternMatchesSport ? Math.round(pattern.typical_duration_min) : sportDefault;
+}
+
 function cloneWorkoutBlock(block, index) {
   return {
     ...block,
@@ -690,6 +770,48 @@ function appendUniqueMessages(messages, additions) {
   return [...(messages || []), ...unique];
 }
 
+function metricUnitForSport(sportType) {
+  if (SPORT_OPTIONS.find((sport) => sport.key === sportType)?.metric === 'speed') return 'km/u';
+  return sportType === 'SWIMMING' ? '/100m' : '/km';
+}
+
+function metricPlaceholder(sportType, field) {
+  const defaults = {
+    WALKING: { min: '8:15', max: '9:15' },
+    RUNNING: { min: '5:55', max: '6:35' },
+    CYCLING: { min: '24', max: '28' },
+    INDOOR_CYCLING: { min: '27', max: '32' },
+    SWIMMING: { min: '2:05', max: '2:25' },
+  };
+  return defaults[sportType]?.[field] || defaults.RUNNING[field];
+}
+
+function splitMetricRange(value) {
+  const text = String(value || '')
+    .replace(/km\/u/g, '')
+    .replace(/\/100m/g, '')
+    .replace(/\/km/g, '')
+    .replace(/[<>]/g, '')
+    .trim();
+  const parts = text.split('-').map((part) => part.trim()).filter(Boolean);
+  return { min: parts[0] || '', max: parts[1] || '' };
+}
+
+function sanitizeMetricInput(value, metric) {
+  const text = String(value || '').replace(',', '.').trim();
+  if (metric === 'speed') return text.replace(/[^\d.]/g, '');
+  return text.replace(/[^\d:]/g, '');
+}
+
+function composeMetricRange(min, max, sportType) {
+  const unit = metricUnitForSport(sportType);
+  const cleanMin = String(min || '').trim();
+  const cleanMax = String(max || '').trim();
+  if (!cleanMin && !cleanMax) return '';
+  const body = cleanMin && cleanMax ? `${cleanMin}-${cleanMax}` : (cleanMin || cleanMax);
+  return unit === 'km/u' ? `${body} ${unit}` : `${body}${unit}`;
+}
+
 function parsePatternStructure(structure) {
   const text = String(structure || '').toLowerCase();
   const match = text.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)(min|s)/);
@@ -706,15 +828,28 @@ function fitBlocksToDuration(blocks, durationMin) {
   const currentSec = blocks.reduce((sum, block) => sum + block.sec, 0);
   const diff = targetSec - currentSec;
   if (!blocks.length || Math.abs(diff) < 60) return blocks;
-  const index = blocks.reduce((best, block, i) => {
-    const currentBest = blocks[best];
-    if (block.zone !== 'Z1' && block.sec > currentBest.sec) return i;
-    if (currentBest.zone === 'Z1' && block.sec > currentBest.sec) return i;
-    return best;
-  }, 0);
-  return blocks.map((block, i) => (
-    i === index ? { ...block, sec: Math.max(60, block.sec + diff) } : block
-  ));
+  const eligible = blocks
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => block.zone !== 'Z1');
+  const targets = eligible.length ? eligible : blocks.map((block, index) => ({ block, index }));
+  const targetIndexes = new Set(targets.map(({ index }) => index));
+  const targetTotal = targets.reduce((sum, { block }) => sum + block.sec, 0) || currentSec;
+  let nextBlocks = blocks.map((block, index) => {
+    if (!targetIndexes.has(index)) return block;
+    const share = block.sec / targetTotal;
+    const minSec = block.zone === 'Z5' ? 20 : 60;
+    return { ...block, sec: Math.max(minSec, Math.round(block.sec + diff * share)) };
+  });
+  const residual = targetSec - nextBlocks.reduce((sum, block) => sum + block.sec, 0);
+  if (Math.abs(residual) >= 1) {
+    const bestIndex = targets.reduce((best, { block, index }) => (
+      block.sec > nextBlocks[best].sec ? index : best
+    ), targets[0].index);
+    nextBlocks = nextBlocks.map((block, index) => (
+      index === bestIndex ? { ...block, sec: Math.max(30, block.sec + residual) } : block
+    ));
+  }
+  return nextBlocks;
 }
 
 function buildPatternIntervals(type, sportType, personalProfile, pattern, colors) {
