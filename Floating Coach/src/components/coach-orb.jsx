@@ -199,7 +199,10 @@ function mockReply(text, score, recoveryData) {
   const R = recoveryData || window.FC_DATA.recovery;
   if (t.includes('slaap')) {
     const sleep = R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'nog niet beschikbaar';
-    return `Je slaap staat op <b>${sleep}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap: ${R.deepSleepMin ?? '–'} min. <i>Body Battery bij ontwaken</i>: ${R.bodyBatteryAtWake ?? R.bodyBattery ?? '–'}%.`;
+    const batteryText = R.bodyBatteryAtWake != null
+      ? `<i>Body Battery bij ontwaken</i>: ${R.bodyBatteryAtWake}%.`
+      : `<i>Body Battery huidig</i>: ${R.bodyBatteryCurrent ?? R.bodyBattery ?? '–'}%.`;
+    return `Je slaap staat op <b>${sleep}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap: ${R.deepSleepMin ?? '–'} min. ${batteryText}`;
   }
   if (t.includes('herstel') || t.includes('recovery')) return `Herstelscore is <b>${score}/6</b>: ${recoveryLabel(score)}. ${recoveryAdvice(score)}`;
   if (t.includes('duur') || t.includes('duurloop')) return `Klaargezet. <b>75 min duurloop</b>, zone 2, doel HR 138-152. <i>FIT-bestand staat in Garmin Connect.</i>`;

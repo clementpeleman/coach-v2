@@ -1349,6 +1349,11 @@ def _valid_numeric_values(values: Dict) -> list[float]:
 
 def _valid_numeric_series(values: Dict) -> list[float]:
     """Return numeric time-offset values sorted by their offset when possible."""
+    return [value for _, value in _valid_numeric_offset_series(values)]
+
+
+def _valid_numeric_offset_series(values: Dict) -> list[tuple[int, float]]:
+    """Return numeric time-offset/value pairs sorted by offset."""
     rows = []
     for offset, value in values.items():
         if not isinstance(value, (int, float)) or value < 0:
@@ -1359,7 +1364,58 @@ def _valid_numeric_series(values: Dict) -> list[float]:
             sort_key = len(rows)
         rows.append((sort_key, float(value)))
     rows.sort(key=lambda row: row[0])
-    return [value for _, value in rows]
+    return rows
+
+
+def _sleep_wake_timestamp(sleep: Dict, stress: Dict) -> Optional[int]:
+    """Infer wake time as Unix UTC seconds from sleep summary or stress Body Battery events."""
+    sleep_start = sleep.get("startTimeInSeconds")
+    sleep_duration = sleep.get("durationInSeconds")
+    if isinstance(sleep_start, (int, float)) and isinstance(sleep_duration, (int, float)):
+        return int(sleep_start + sleep_duration)
+
+    events = stress.get("bodyBatteryActivityEvents") or []
+    sleep_event_ends = []
+    for event in events:
+        if not isinstance(event, dict) or (event.get("eventType") or "").upper() != "SLEEP":
+            continue
+        event_start = event.get("eventStartTimeInSeconds")
+        event_duration = event.get("duration")
+        if isinstance(event_start, (int, float)) and isinstance(event_duration, (int, float)):
+            sleep_event_ends.append(int(event_start + event_duration))
+    return max(sleep_event_ends) if sleep_event_ends else None
+
+
+def _body_battery_at_wake(stress: Dict, sleep: Dict) -> Optional[int]:
+    """Pick the Body Battery sample closest to wake time instead of the first daily sample."""
+    stress_start = stress.get("startTimeInSeconds")
+    if not isinstance(stress_start, (int, float)):
+        return None
+
+    wake_timestamp = _sleep_wake_timestamp(sleep, stress)
+    if wake_timestamp is None:
+        return None
+
+    samples = _valid_numeric_offset_series(stress.get("timeOffsetBodyBatteryValues", {}))
+    if not samples:
+        return None
+
+    absolute_samples = [(int(stress_start + offset), value) for offset, value in samples]
+    after_wake = [
+        (timestamp, value)
+        for timestamp, value in absolute_samples
+        if timestamp >= wake_timestamp and timestamp - wake_timestamp <= 3 * 3600
+    ]
+    if after_wake:
+        return round(after_wake[0][1])
+
+    closest_timestamp, closest_value = min(
+        absolute_samples,
+        key=lambda row: abs(row[0] - wake_timestamp),
+    )
+    if abs(closest_timestamp - wake_timestamp) <= 3 * 3600:
+        return round(closest_value)
+    return None
 
 
 def _valid_stress_values(values: Dict) -> list[int]:
@@ -2103,8 +2159,13 @@ async def get_recovery_snapshot(
         sleep_hours = round(sleep_duration_seconds / 3600, 1) if sleep_duration_seconds else None
         sleep_score = _sleep_score(sleep)
         avg_stress = round(sum(stress_values) / len(stress_values)) if stress_values else None
-        body_battery_at_wake = round(body_battery_values[0]) if body_battery_values else None
+        body_battery_at_wake = _body_battery_at_wake(stress, sleep)
         body_battery_current = round(body_battery_values[-1]) if body_battery_values else None
+        body_battery_for_score = (
+            body_battery_at_wake
+            if body_battery_at_wake is not None
+            else body_battery_current
+        )
         hrv_overnight = (
             int(hrv.get("lastNightAvg"))
             if isinstance(hrv.get("lastNightAvg"), (int, float))
@@ -2126,7 +2187,7 @@ async def get_recovery_snapshot(
             sleep_score=sleep_score,
             sleep_hours=sleep_hours,
             avg_stress=avg_stress,
-            body_battery=body_battery_at_wake if body_battery_at_wake is not None else body_battery_current,
+            body_battery=body_battery_for_score,
             hrv=hrv_overnight,
             recent_training_penalty=training_fatigue["penalty"],
         )
@@ -2151,7 +2212,7 @@ async def get_recovery_snapshot(
                 "lightMin": _minutes(sleep.get("lightSleepDurationInSeconds")),
                 "awakeMin": _minutes(sleep.get("awakeDurationInSeconds")),
                 "avgStress": avg_stress,
-                "bodyBattery": body_battery_at_wake,
+                "bodyBattery": body_battery_for_score,
                 "bodyBatteryAtWake": body_battery_at_wake,
                 "bodyBatteryCurrent": body_battery_current,
                 "hrvOvernight": hrv_overnight,

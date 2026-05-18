@@ -11,7 +11,9 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
   const ringPct = recoveryScore / 6;
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
   const c = 2 * Math.PI * 100;
-  const bodyBatteryAtWake = R.bodyBatteryAtWake ?? R.bodyBattery ?? null;
+  const bodyBatteryAtWake = R.bodyBatteryAtWake ?? null;
+  const bodyBatteryDisplay = bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery ?? null;
+  const bodyBatterySub = bodyBatteryAtWake == null && bodyBatteryDisplay != null ? "huidig" : "bij ontwaken";
   const hasRecentTraining = R.recentTrainingLoad != null || Boolean(R.hardestRecentActivity);
 
   return (
@@ -121,8 +123,8 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
           sub="bij gemiddelde" contribution={24} trend="flat" />
         <InputCard label="Stress (avg 24h)" value={`${R.avgStress ?? '–'}`} unit={R.avgStress == null ? "" : "/100"}
           sub="laag-gemiddeld" contribution={22} trend="down" />
-        <InputCard label="Body Battery" value={`${bodyBatteryAtWake ?? '–'}`} unit={bodyBatteryAtWake == null ? "" : "%"}
-          sub="bij ontwaken" contribution={26} trend="up" />
+        <InputCard label="Body Battery" value={`${bodyBatteryDisplay ?? '–'}`} unit={bodyBatteryDisplay == null ? "" : "%"}
+          sub={bodyBatterySub} contribution={26} trend="up" />
         {hasRecentTraining && (
           <InputCard label="Recente training" value={`${R.recentTrainingLoad ?? '–'}`} unit={R.recentTrainingLoad == null ? "" : "load"}
             sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel}` : "Laatste 48 uur"}

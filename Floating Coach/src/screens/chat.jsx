@@ -241,7 +241,8 @@ function ChatScreen({
         <div className="card tight" style={{ background: 'var(--bg-soft)', borderColor: 'transparent' }}>
           <div className="label" style={{ marginBottom: 12 }}>Context vandaag</div>
           <ContextRow k="Slaap" v={R.sleepHours ? `${R.sleepHours.toFixed(1)}u (score ${R.sleepScore ?? '–'})` : 'Geen slaapdata'} />
-          <ContextRow k="Body Battery ontwaken" v={(R.bodyBatteryAtWake ?? R.bodyBattery) == null ? 'Geen data' : `${R.bodyBatteryAtWake ?? R.bodyBattery}%`} />
+          <ContextRow k={R.bodyBatteryAtWake == null ? "Body Battery huidig" : "Body Battery ontwaken"}
+            v={(R.bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery) == null ? 'Geen data' : `${R.bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery}%`} />
           <ContextRow k="HRV overnight" v={R.hrvOvernight == null ? 'Geen data' : `${R.hrvOvernight}ms`} />
           <ContextRow k="Resting HR" v={R.restingHr == null ? 'Geen data' : `${R.restingHr} bpm`} />
           <ContextRow k="Stress" v={R.avgStress == null ? 'Geen data' : `${R.avgStress}/100`} />
@@ -421,7 +422,11 @@ function ThinkDot({ d }) {
 function mockReplyChat(text, score, recoveryData) {
   const t = text.toLowerCase();
   const R = recoveryData || window.FC_DATA.recovery;
-  if (t.includes('slaap')) return `Je slaap staat op <b>${R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'geen data'}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap ${R.deepSleepMin ?? '–'} min, REM ${R.remMin ?? '–'} min, awake ${R.awakeMin ?? '–'} min. Body Battery bij ontwaken staat op ${R.bodyBatteryAtWake ?? R.bodyBattery ?? '–'}%.<br/><br/>Dat is de meest recente Garmin-data die ik lokaal heb.`;
+  if (t.includes('slaap')) {
+    const batteryLabel = R.bodyBatteryAtWake == null ? 'huidig' : 'bij ontwaken';
+    const battery = R.bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery ?? '–';
+    return `Je slaap staat op <b>${R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'geen data'}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap ${R.deepSleepMin ?? '–'} min, REM ${R.remMin ?? '–'} min, awake ${R.awakeMin ?? '–'} min. Body Battery ${batteryLabel} staat op ${battery}${battery === '–' ? '' : '%'}<br/><br/>Dat is de meest recente Garmin-data die ik lokaal heb.`;
+  }
   if (t.includes('herstel') || t.includes('recovery') || t.includes('herstel check')) return `<b>Herstelscore ${score}/6 — ${FCU.recoveryLabel(score)}</b><br/><br/>${FCU.recoveryAdvice(score)} HRV staat op <b>${R.hrvOvernight ?? '–'}ms</b>. Resting HR <b>${R.restingHr ?? '–'} bpm</b>.`;
   if (t.includes('duur')) return `Klaargezet. <b>75 min duurloop</b>, zone 2 (HR 138-152). Warming-up 8 min, duurblok 60 min, cooling-down 7 min. <i>FIT-bestand staat in Garmin Connect.</i><br/><br/>Wil je dat ik er ook een drinkmoment inplan?`;
   if (t.includes('interval') || t.includes('tempo') || t.includes('drempel')) return `<b>2× 12 min tempo</b> met 4 min herstel tussendoor.<br/><br/>WU 12 min easy · 12 min @ drempel (162-168) · 4 min easy · 12 min @ drempel · CD 8 min<br/><br/>Wil je dit nu starten?`;
