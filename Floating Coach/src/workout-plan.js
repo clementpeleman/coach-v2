@@ -31,7 +31,11 @@
     const sportType = previous?.sportType || pattern?.preferred_sport || sportFromRecommendation(rec.sport);
     const durationMin = previous?.durationMin || plannedDurationForSport(type, sportType, rec.duration, pattern);
     const personalProfile = trainingProfile?.personal_targets?.[sportType] || null;
-    const blocks = fitBlocksToDuration(buildStructure(type, sportType, personalProfile, pattern), durationMin);
+    const blocks = normalizeWorkoutBlocks(
+      fitBlocksToDuration(buildStructure(type, sportType, personalProfile, pattern), durationMin),
+      sportType,
+      type,
+    );
     return {
       id: previous?.id || `draft-${Date.now()}`,
       status: previous?.status || 'draft',
@@ -39,6 +43,7 @@
       type,
       sportType,
       durationMin,
+      preferredTargetMode: preferredTargetModeForBlocks(blocks, sportType),
       intensityPct: previous?.intensityPct || 100,
       blocks,
       note: previous?.note || 'Gebaseerd op je herstel en sportprofiel.',
@@ -93,7 +98,11 @@
     const interval = lower.match(/\b(\d{1,2})\s*x\s*(\d{1,2})\s*(min|m|')\b/);
     if (interval && ['THRESHOLD', 'VO2MAX'].includes(next.type)) {
       const personalProfile = context.trainingProfile?.personal_targets?.[next.sportType] || null;
-      next.blocks = buildCustomIntervals(next.type, next.sportType, Number(interval[1]), Number(interval[2]) * 60, personalProfile);
+      next.blocks = normalizeWorkoutBlocks(
+        buildCustomIntervals(next.type, next.sportType, Number(interval[1]), Number(interval[2]) * 60, personalProfile),
+        next.sportType,
+        next.type,
+      );
       next.durationMin = Math.round(next.blocks.reduce((sum, block) => sum + block.sec, 0) / 60);
       rebuild = false;
       changed = true;
@@ -114,9 +123,14 @@
     if (rebuild) {
       const personalProfile = context.trainingProfile?.personal_targets?.[next.sportType] || null;
       const pattern = context.trainingProfile?.workout_patterns?.by_type?.[next.type] || null;
-      next.blocks = fitBlocksToDuration(buildStructure(next.type, next.sportType, personalProfile, pattern), next.durationMin);
+      next.blocks = normalizeWorkoutBlocks(
+        fitBlocksToDuration(buildStructure(next.type, next.sportType, personalProfile, pattern), next.durationMin),
+        next.sportType,
+        next.type,
+      );
     }
     if (!changed) return { draft: current, changed: false, summary: null };
+    next.preferredTargetMode = preferredTargetModeForBlocks(next.blocks, next.sportType);
     next.updatedAt = new Date().toISOString();
     next.note = notes.length ? `Aangepast door coach: ${notes.join(', ')}.` : current.note;
     return { draft: next, changed: true, summary: next.note };
@@ -288,9 +302,9 @@
         z5: { pace: '6:30-7:15/km' },
       },
       RUNNING: {
-        rest: { pace: '8:00-10:00/km' },
-        z1: { pace: '6:45-7:40/km' },
-        z2: { pace: '5:55-6:35/km' },
+        rest: { pace: '7:45-8:45/km' },
+        z1: { pace: '7:05-8:05/km' },
+        z2: { pace: '6:20-7:05/km' },
         z4: { pace: '4:55-5:15/km' },
         z5: { pace: '4:25-4:45/km' },
       },
@@ -332,17 +346,161 @@
     const effort = effortForMetricZone(zone);
     const personalZone = personalProfile?.zones?.[effort];
     const personalMetric = personalZone?.metric;
-    const personalTarget = personalProfile?.metric_type === 'speed'
-      ? { speed: personalMetric || defaults.speed }
-      : { pace: personalMetric || defaults.pace };
-    return {
+    const wantsSpeed = personalProfile?.metric_type === 'speed';
+    const personalMetricSafe = isMetricPlausibleForWorkout(sportType, zone, personalMetric);
+    const personalTarget = wantsSpeed
+      ? { speed: personalMetricSafe ? personalMetric : defaults.speed }
+      : { pace: personalMetricSafe ? personalMetric : defaults.pace };
+    const targetNote = personalMetric && !personalMetricSafe
+      ? fallbackTargetNote(sportType, zone)
+      : null;
+    const nextBlock = {
       ...block,
       ...defaults,
       ...personalTarget,
       hr: personalZone?.hr || block.hr,
-      personalized: Boolean(personalMetric || personalZone?.hr),
-      source: personalZone?.source || 'fallback',
+      personalized: Boolean(personalMetricSafe || personalZone?.hr),
+      source: personalMetricSafe || personalZone?.hr ? (personalZone?.source || 'fallback') : 'fallback',
+      metricZone: zone,
     };
+    if (targetNote) {
+      nextBlock.targetNote = targetNote;
+      nextBlock.preferredTargetMode = 'hr';
+    }
+    return normalizeBlockTarget(nextBlock, sportType, zone);
+  }
+
+  function fallbackTargetNote(sportType) {
+    if (sportType === 'RUNNING') {
+      return 'Persoonlijke pace leek wandeltempo of bevatte pauzes; daarom begrens ik tempo en laat ik hartslag leidend.';
+    }
+    return 'Persoonlijke target leek onlogisch; daarom gebruik ik een veilige fallback.';
+  }
+
+  function isMetricPlausibleForWorkout(sportType, zone, metric) {
+    if (!metric) return false;
+    if (sportType === 'RUNNING') {
+      const range = parsePaceRange(metric);
+      if (!range) return false;
+      const ceilings = { rest: 9*60, z1: 8*60 + 45, z2: 7*60 + 35, z4: 6*60 + 25, z5: 5*60 + 45 };
+      const floors = { rest: 4*60 + 45, z1: 4*60 + 25, z2: 4*60, z4: 3*60 + 20, z5: 3*60 };
+      const ceiling = ceilings[zone] || ceilings.z1;
+      const floor = floors[zone] || floors.z1;
+      return range.max <= ceiling && range.min >= floor;
+    }
+    if (sportType === 'WALKING') {
+      const range = parsePaceRange(metric);
+      return Boolean(range && range.min >= 7*60 && range.max <= 16*60);
+    }
+    if (sportType === 'SWIMMING') {
+      const range = parsePaceRange(metric);
+      return Boolean(range && range.min >= 55 && range.max <= 5*60);
+    }
+    if (sportType === 'CYCLING' || sportType === 'INDOOR_CYCLING') {
+      const range = parseNumericRange(metric);
+      return Boolean(range && range.min >= 8 && range.max <= 65);
+    }
+    return true;
+  }
+
+  function normalizeBlockTarget(block, sportType, zone) {
+    if (sportType !== 'RUNNING') return block;
+    if (!block.pace) return block;
+    const range = parsePaceRange(block.pace);
+    if (!range) return block;
+    const hardCeiling = { rest: 9*60, z1: 8*60 + 45, z2: 7*60 + 35, z4: 6*60 + 25, z5: 5*60 + 45 }[zone] || 9*60;
+    if (range.max <= hardCeiling) return block;
+    const safe = metricForSport('RUNNING', zone)?.pace;
+    return {
+      ...block,
+      pace: safe || block.pace,
+      source: block.source === 'fallback' ? 'fallback' : 'guarded',
+      targetNote: block.targetNote || 'Tempo begrensd zodat hardlopen geen wandeltempo wordt.',
+      preferredTargetMode: 'hr',
+    };
+  }
+
+  function normalizeWorkoutBlocks(blocks, sportType, workoutType) {
+    const normalized = enforceTargetOrder((blocks || []).map((block) => (
+      normalizeBlockTarget(block, sportType, block.metricZone || zoneToMetricZone(block.zone))
+    )), sportType, workoutType);
+    return normalized;
+  }
+
+  function enforceTargetOrder(blocks, sportType) {
+    if (!Array.isArray(blocks) || !blocks.length) return [];
+    if (sportType === 'RUNNING' || sportType === 'SWIMMING' || sportType === 'WALKING') {
+      return blocks.map((block) => {
+        if (!block.pace) return block;
+        const range = parsePaceRange(block.pace);
+        if (!range) return block;
+        const zone = block.metricZone || zoneToMetricZone(block.zone);
+        const defaults = metricForSport(sportType, zone);
+        const fallback = defaults?.pace;
+        if (!isMetricPlausibleForWorkout(sportType, zone, block.pace) && fallback) {
+          return {
+            ...block,
+            pace: fallback,
+            source: block.source === 'fallback' ? 'fallback' : 'guarded',
+            targetNote: block.targetNote || 'Tempo begrensd naar een logische sportzone.',
+            preferredTargetMode: sportType === 'RUNNING' ? 'hr' : block.preferredTargetMode,
+          };
+        }
+        return block;
+      });
+    }
+    if (sportType === 'CYCLING' || sportType === 'INDOOR_CYCLING') {
+      return blocks.map((block) => {
+        if (!block.speed) return block;
+        const zone = block.metricZone || zoneToMetricZone(block.zone);
+        const defaults = metricForSport(sportType, zone);
+        if (!isMetricPlausibleForWorkout(sportType, zone, block.speed) && defaults?.speed) {
+          return {
+            ...block,
+            speed: defaults.speed,
+            source: block.source === 'fallback' ? 'fallback' : 'guarded',
+            targetNote: block.targetNote || 'Snelheid begrensd naar een logische sportzone.',
+          };
+        }
+        return block;
+      });
+    }
+    return blocks;
+  }
+
+  function zoneToMetricZone(zone) {
+    const key = String(zone || '').toUpperCase();
+    if (key === 'Z5') return 'z5';
+    if (key === 'Z4') return 'z4';
+    if (key === 'Z2') return 'z2';
+    if (key === 'REST') return 'rest';
+    return 'z1';
+  }
+
+  function parsePaceRange(value) {
+    const text = String(value || '').replace(/\/100m|\/km/g, '').trim();
+    const parts = text.split('-').map((part) => parsePaceSeconds(part.trim())).filter((part) => part != null);
+    if (!parts.length) return null;
+    return { min: Math.min(...parts), max: Math.max(...parts) };
+  }
+
+  function parsePaceSeconds(value) {
+    const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
+  }
+
+  function parseNumericRange(value) {
+    const nums = String(value || '').match(/\d+(?:\.\d+)?/g);
+    if (!nums?.length) return null;
+    const values = nums.map(Number);
+    return { min: Math.min(...values), max: Math.max(...values) };
+  }
+
+  function preferredTargetModeForBlocks(blocks, sportType) {
+    if ((blocks || []).some((block) => block.preferredTargetMode === 'hr')) return 'hr';
+    const metric = SPORT_OPTIONS.find((sport) => sport.key === sportType)?.metric;
+    return metric === 'speed' || metric === 'pace' ? 'pace' : 'hr';
   }
 
   function fitBlocksToDuration(blocks, durationMin) {
@@ -371,6 +529,7 @@
 
   function targetForBlock(block, sportType) {
     const metric = SPORT_OPTIONS.find((sport) => sport.key === sportType)?.metric;
+    if (block?.preferredTargetMode === 'hr' && block.hr) return `HR ${block.hr} bpm`;
     return metric === 'speed' ? block.speed : block.pace;
   }
 
@@ -383,6 +542,8 @@
     approveDraft,
     buildStructure,
     fitBlocksToDuration,
+    normalizeWorkoutBlocks,
+    preferredTargetModeForBlocks,
     metricForSport,
     sportLabel,
     typeLabel,

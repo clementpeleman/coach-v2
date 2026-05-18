@@ -479,6 +479,35 @@ def _format_hr_range(hr_range: Optional[tuple[float, float]]) -> Optional[str]:
     return f"{round(low)}-{round(high)}"
 
 
+def _metric_plausible_for_training_target(metric: Optional[float], sport: str, effort: str) -> bool:
+    """Keep route pauses/walking from becoming pace targets for structured workouts."""
+    if metric is None or metric <= 0:
+        return False
+    if sport == "RUNNING":
+        # seconds per km. Slower than this is usually walking, stops, trail hiking,
+        # or run/walk data: useful context, but not a running pace prescription.
+        max_by_effort = {
+            "easy": 9 * 60,
+            "endurance": 8 * 60 + 45,
+            "threshold": 7 * 60 + 30,
+            "vo2": 6 * 60 + 45,
+        }
+        min_by_effort = {
+            "easy": 4 * 60 + 30,
+            "endurance": 4 * 60,
+            "threshold": 3 * 60 + 20,
+            "vo2": 3 * 60,
+        }
+        return min_by_effort.get(effort, 3 * 60) <= metric <= max_by_effort.get(effort, 9 * 60)
+    if sport == "WALKING":
+        return 7 * 60 <= metric <= 16 * 60
+    if sport == "SWIMMING":
+        return 55 <= metric <= 5 * 60
+    if sport in {"CYCLING", "INDOOR_CYCLING"}:
+        return 8 <= metric <= 65
+    return True
+
+
 def _build_activity_detail_index(details: list[GarminActivityAuxiliaryData]) -> Dict[str, Dict]:
     """Index activityDetails by all known Garmin identifiers."""
     index: Dict[str, Dict] = {}
@@ -600,6 +629,8 @@ def _classify_effort(activity: GarminActivityData, sport_max_hr: Optional[int]) 
     name = (activity.activity_name or "").lower()
     if any(word in name for word in ["easy", "herstel", "recovery", "rustig", "walk", "wandel"]):
         return "easy"
+    if any(word in name for word in ["duur", "endurance", "zone 2", "z2", "lsd", "long slow"]):
+        return "endurance"
     if any(word in name for word in ["tempo", "threshold", "drempel"]):
         return "threshold"
     if any(word in name for word in ["interval", "vo2", "sprint"]):
@@ -712,7 +743,7 @@ def build_personal_training_profile(
                 for segment in segments:
                     metric = _segment_metric(segment, sport)
                     effort = _classify_segment_effort(segment, sport_max_hr, metric, sport)
-                    if metric:
+                    if _metric_plausible_for_training_target(metric, sport, effort):
                         detail_metric_values[effort].append(metric)
                         all_metrics.append(metric)
                     if segment.get("heart_rate"):
@@ -721,7 +752,7 @@ def build_personal_training_profile(
 
             effort = _classify_effort(activity, sport_max_hr)
             metric = _activity_metric(activity, sport)
-            if metric:
+            if _metric_plausible_for_training_target(metric, sport, effort):
                 metric_values[effort].append(metric)
                 all_metrics.append(metric)
             if activity.average_heart_rate:

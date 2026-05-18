@@ -54,7 +54,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
 
   const [sportType, setSportType] = useStateW(draftWorkout?.sportType || sportFromRecommendation(rec.sport));
   const [sportTouched, setSportTouched] = useStateW(false);
-  const [targetMode, setTargetMode] = useStateW('pace');
+  const [targetMode, setTargetMode] = useStateW(draftWorkout?.preferredTargetMode || 'pace');
   const [intensityPct, setIntensityPct] = useStateW(100);
   const [selectedBlockIndex, setSelectedBlockIndex] = useStateW(0);
   const [editedBlocks, setEditedBlocks] = useStateW([]);
@@ -66,6 +66,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
     if (!draftWorkout?.sportType) return;
     setSportType(draftWorkout.sportType);
     if (draftWorkout.intensityPct) setIntensityPct(draftWorkout.intensityPct);
+    if (draftWorkout.preferredTargetMode) setTargetMode(draftWorkout.preferredTargetMode);
   }, [draftWorkout?.updatedAt]);
 
   const selectedSport = SPORT_OPTIONS.find((sport) => sport.key === sportType) || SPORT_OPTIONS[1];
@@ -92,9 +93,13 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
     : (planEngine?.buildStructure
       ? planEngine.buildStructure(rec.type, sportType, personalSportProfile, structurePattern)
       : buildStructure(rec.type, sportType, personalSportProfile, structurePattern));
-  const defaultBlocks = draftMatchesView
+  const fittedBlocks = draftMatchesView
     ? baseBlocks
     : (planEngine?.fitBlocksToDuration ? planEngine.fitBlocksToDuration(baseBlocks, plannedDuration) : fitBlocksToDuration(baseBlocks, plannedDuration));
+  const shouldRespectManualDraft = draftMatchesView && draftWorkout?.source === 'workout-editor';
+  const defaultBlocks = shouldRespectManualDraft
+    ? fittedBlocks
+    : (planEngine?.normalizeWorkoutBlocks ? planEngine.normalizeWorkoutBlocks(fittedBlocks, sportType, rec.type) : fittedBlocks);
   const defaultBlocksKey = [
     rec.type,
     sportType,
@@ -116,16 +121,20 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const adjustedBlocks = blocks.map((block) => ({
     ...block,
     adjustedHr: adjustHrRange(block.hr, intensityPct),
-    adjustedPace: adjustPaceRange(block.pace, intensityPct),
+    adjustedPace: adjustPaceRange(block.pace, intensityPct, sportType, block.metricZone || zoneToMetricZone(block.zone)),
     adjustedSpeed: adjustSpeedRange(block.speed, intensityPct),
   }));
   const workBlocks = adjustedBlocks.filter((b) => !['Z1'].includes(b.zone));
   const mainTarget = workBlocks[0] || adjustedBlocks[1] || adjustedBlocks[0];
+  const targetWarnings = adjustedBlocks.map((block) => block.targetNote).filter(Boolean);
+  const visibleTargetMode = targetMode === 'pace' && mainTarget?.preferredTargetMode === 'hr' ? 'hr' : targetMode;
   const primaryTargetValue = selectedSport.metric === 'speed' ? mainTarget?.adjustedSpeed : mainTarget?.adjustedPace;
-  const targetLabel = targetMode === 'pace' ? primaryTargetLabel : 'Hartslag';
-  const targetValue = targetMode === 'pace' ? primaryTargetValue : `${mainTarget?.adjustedHr} bpm`;
+  const targetLabel = visibleTargetMode === 'pace' ? primaryTargetLabel : 'Hartslag';
+  const targetValue = visibleTargetMode === 'pace' ? primaryTargetValue : `${mainTarget?.adjustedHr} bpm`;
   const getPrimaryTarget = (block) => (
-    selectedSport.metric === 'speed' ? block.adjustedSpeed : block.adjustedPace
+    (targetMode === 'hr' || block.preferredTargetMode === 'hr')
+      ? (block.adjustedHr ? `HR ${block.adjustedHr} bpm` : 'vrij')
+      : (selectedSport.metric === 'speed' ? block.adjustedSpeed : block.adjustedPace)
   ) || 'vrij';
   const selectedBlock = blocks[Math.min(selectedBlockIndex, blocks.length - 1)] || blocks[0];
   const selectedAdjustedBlock = adjustedBlocks[Math.min(selectedBlockIndex, adjustedBlocks.length - 1)] || adjustedBlocks[0];
@@ -174,6 +183,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
       durationMin,
       intensityPct,
       blocks: nextBlocks,
+      preferredTargetMode: window.FC_WORKOUT_PLAN?.preferredTargetModeForBlocks?.(nextBlocks, sportType) || targetMode,
       status: 'draft',
       source: 'workout-editor',
       note: 'Handmatig aangepast in de workout-editor.',
@@ -319,8 +329,22 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               <span className="tag accent">{mainTarget?.zone}</span>
             </div>
             <div style={{ fontSize: 14, color: 'oklch(78% 0.01 100)', marginTop: 6 }}>
-              Gebruik <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> als primaire sturing. Hartslag blijft nuttig als veiligheidscheck.
+              Gebruik <b>{visibleTargetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> als primaire sturing. Hartslag blijft nuttig als veiligheidscheck.
+              {visibleTargetMode === 'hr' && targetMode === 'pace' ? ' Tempo blijft alleen indicatief omdat de pace-data niet betrouwbaar genoeg is.' : ''}
             </div>
+            {targetWarnings[0] && (
+              <div style={{
+                marginTop: 10,
+                padding: '9px 11px',
+                borderRadius: 10,
+                background: 'oklch(25% 0.035 75)',
+                color: 'oklch(88% 0.08 90)',
+                fontSize: 12,
+                lineHeight: 1.35,
+              }}>
+                {targetWarnings[0]}
+              </div>
+            )}
             <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
               textTransform: 'uppercase', letterSpacing: '.12em', marginTop: 8 }}>
               {personalSportProfile
@@ -339,7 +363,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               letterSpacing: '-.03em', marginTop: 8 }}>{targetValue || '–'}</div>
             <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
               textTransform: 'uppercase', letterSpacing: '.16em', marginTop: 8 }}>
-              Aangepast naar {intensityPct}%
+              {visibleTargetMode === 'hr' && targetMode === 'pace' ? 'Tempo indicatief' : `Aangepast naar ${intensityPct}%`}
             </div>
           </div>
         </div>
@@ -575,9 +599,9 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                   </div>
                   <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)',
                     marginTop: 4 }}>
-                    {targetMode === 'pace'
+                    {targetMode === 'pace' && b.preferredTargetMode !== 'hr'
                       ? `${primaryTargetLabel}: ${getPrimaryTarget(b)} · HR check: ${b.adjustedHr} bpm`
-                      : `HR doel: ${b.adjustedHr} bpm · ${primaryTargetLabel} indicatie: ${getPrimaryTarget(b)}`}
+                      : `HR doel: ${b.adjustedHr} bpm · ${primaryTargetLabel} indicatie: ${selectedSport.metric === 'speed' ? (b.adjustedSpeed || 'vrij') : (b.adjustedPace || 'vrij')}`}
                     {b.personalized && (
                       <span style={{ color: 'var(--ink-3)' }}>
                         {' '}· geleerd uit {b.source === 'activityDetails' ? 'details/laps' : 'sessies'}
@@ -632,7 +656,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
             <span className="label">Coach notitie</span>
             <p style={{ fontSize: 14, lineHeight: 1.55, marginTop: 10, color: 'var(--ink-2)' }}>
               {rec.desc} Met je <b>recovery {recoveryScore}/6</b> ben je hier prima op geconditioneerd.
-              Deze versie is ingesteld voor <b>{selectedSport.label.toLowerCase()}</b>, stuurt primair op <b>{targetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> en staat op <b>{intensityPct}%</b>.
+              Deze versie is ingesteld voor <b>{selectedSport.label.toLowerCase()}</b>, stuurt primair op <b>{visibleTargetMode === 'pace' ? primaryTargetText : 'hartslag'}</b> en staat op <b>{intensityPct}%</b>.
               {personalSportProfile
                 ? ` Targets zijn geleerd uit je laatste ${personalSportProfile.sessions} ${selectedSport.label.toLowerCase()}-sessies${detailSegments ? ` en ${detailSegments} detailsegmenten` : ''}.`
                 : ' Ik gebruik voorlopig ruime standaardtargets tot er meer sessies binnen zijn.'}
@@ -727,7 +751,8 @@ function adjustHrRange(range, pct) {
   if (!range) return '–';
   const nums = String(range).match(/\d+/g);
   if (!nums || nums.length === 0) return range;
-  const adjusted = nums.map((n) => Math.round(Number(n) * pct / 100));
+  const factor = 1 + ((pct - 100) * 0.003);
+  const adjusted = nums.map((n) => Math.round(Number(n) * factor));
   if (String(range).trim().startsWith('>')) return `> ${adjusted[0]}`;
   return adjusted.length >= 2 ? `${adjusted[0]}-${adjusted[1]}` : `${adjusted[0]}`;
 }
@@ -744,13 +769,13 @@ function secondsToPace(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function adjustPaceRange(range, pct) {
+function adjustPaceRange(range, pct, sportType = 'RUNNING', metricZone = 'z1') {
   if (!range) return null;
   const suffix = String(range).includes('/100m') ? '/100m' : '/km';
   const parts = String(range).replace(suffix, '').split('-').map((p) => p.trim()).filter(Boolean);
   if (!parts.length) return range;
-  const factor = 100 / pct;
-  const adjusted = parts.map((p) => secondsToPace(paceToSeconds(p) * factor));
+  const factor = 1 + ((100 - pct) * 0.004);
+  const adjusted = parts.map((p) => secondsToPace(clampPaceSeconds(paceToSeconds(p) * factor, sportType, metricZone)));
   return `${adjusted.length >= 2 ? adjusted.join('-') : adjusted[0]}${suffix}`;
 }
 
@@ -758,9 +783,19 @@ function adjustSpeedRange(range, pct) {
   if (!range) return null;
   const nums = String(range).match(/\d+(\.\d+)?/g);
   if (!nums || nums.length === 0) return range;
-  const adjusted = nums.map((n) => Math.round(Number(n) * pct / 100));
+  const factor = 1 + ((pct - 100) * 0.005);
+  const adjusted = nums.map((n) => Math.round(Number(n) * factor));
   if (String(range).trim().startsWith('>')) return `> ${adjusted[0]} km/u`;
   return `${adjusted.length >= 2 ? adjusted.join('-') : adjusted[0]} km/u`;
+}
+
+function clampPaceSeconds(seconds, sportType, metricZone) {
+  if (sportType !== 'RUNNING') return seconds;
+  const ceilings = { rest: 9*60, z1: 8*60 + 45, z2: 7*60 + 35, z4: 6*60 + 25, z5: 5*60 + 45 };
+  const floors = { rest: 4*60 + 45, z1: 4*60 + 25, z2: 4*60, z4: 3*60 + 20, z5: 3*60 };
+  const ceiling = ceilings[metricZone] || ceilings.z1;
+  const floor = floors[metricZone] || floors.z1;
+  return Math.min(ceiling, Math.max(floor, seconds));
 }
 
 function sportFromRecommendation(sport) {
@@ -825,6 +860,15 @@ function appendUniqueMessages(messages, additions) {
 function metricUnitForSport(sportType) {
   if (SPORT_OPTIONS.find((sport) => sport.key === sportType)?.metric === 'speed') return 'km/u';
   return sportType === 'SWIMMING' ? '/100m' : '/km';
+}
+
+function zoneToMetricZone(zone) {
+  const key = String(zone || '').toUpperCase();
+  if (key === 'Z5') return 'z5';
+  if (key === 'Z4') return 'z4';
+  if (key === 'Z2') return 'z2';
+  if (key === 'REST') return 'rest';
+  return 'z1';
 }
 
 function metricPlaceholder(sportType, field) {
@@ -949,9 +993,9 @@ function metricForSport(sportType, zone) {
       z5: { pace: '6:30-7:15/km' },
     },
     RUNNING: {
-      rest: { pace: '8:00-10:00/km' },
-      z1: { pace: '6:45-7:40/km' },
-      z2: { pace: '5:55-6:35/km' },
+      rest: { pace: '7:45-8:45/km' },
+      z1: { pace: '7:05-8:05/km' },
+      z2: { pace: '6:20-7:05/km' },
       z4: { pace: '4:55-5:15/km' },
       z5: { pace: '4:25-4:45/km' },
     },
