@@ -68,7 +68,22 @@ function App() {
 
   useEffectApp(() => {
     if (!window.FC_WORKOUT_PLAN) return;
-    setDraftWorkout((current) => current || window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore, trainingProfile }));
+    setDraftWorkout((current) => {
+      const shouldRefreshAutoDraft = !current || (
+        current.source === 'auto'
+        && current.status !== 'approved'
+        && (
+          current.recoveryScore !== recoveryScore
+          || (trainingProfile && !current.profileApplied)
+        )
+      );
+      if (!shouldRefreshAutoDraft) return current;
+      return {
+        ...window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore, trainingProfile }),
+        recoveryScore,
+        profileApplied: Boolean(trainingProfile),
+      };
+    });
   }, [recoveryScore, trainingProfile]);
 
   useEffectApp(() => {

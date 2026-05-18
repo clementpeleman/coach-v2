@@ -2,14 +2,14 @@
 const { useEffect: useEffectD, useState: useStateD } = React;
 const FC = window.FC_UTILS;
 
-function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onNavigate, apiStatus, userId }) {
+function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onNavigate, apiStatus, userId, draftWorkout }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
   const activeDate = recoverySnapshot?.calendar_date
     ? new Date(`${recoverySnapshot.calendar_date}T12:00:00`)
     : new Date();
   const online = apiStatus === 'online';
-  const rec = D.recommendedByRecovery[recoveryScore] || D.recommendedByRecovery[4];
+  const rec = dashboardRecommendationFromDraft(draftWorkout, recoveryScore);
 
   // Live data — falls back to mock when offline / no user / API error.
   const activitiesQuery = window.useLiveData(
@@ -88,7 +88,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
       )}
 
       {/* Hero workout card */}
-      <HeroWorkout rec={rec} score={recoveryScore} weather={weather} onNavigate={onNavigate} />
+      <HeroWorkout rec={rec} draftWorkout={draftWorkout} score={recoveryScore} weather={weather} onNavigate={onNavigate} />
 
       {/* Metric strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
@@ -108,7 +108,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
   );
 }
 
-function HeroWorkout({ rec, score, weather, onNavigate }) {
+function HeroWorkout({ rec, draftWorkout, score, weather, onNavigate }) {
   const D = window.FC_DATA;
   const ringPct = (score / 6);
   const ringClass = score <= 2 ? 'bad' : score <= 3 ? 'warn' : '';
@@ -149,7 +149,7 @@ function HeroWorkout({ rec, score, weather, onNavigate }) {
           </p>
 
           {/* Workout structure mini-strip */}
-          <WorkoutStrip type={rec.type} />
+          <WorkoutStrip type={rec.type} draftWorkout={draftWorkout} />
 
           <div style={{ display: 'flex', gap: 12, marginTop: 24, alignItems: 'center' }}>
             <button className="btn accent xl" onClick={() => onNavigate('workout')}>
@@ -207,10 +207,13 @@ function HeroWorkout({ rec, score, weather, onNavigate }) {
   );
 }
 
-function WorkoutStrip({ type }) {
+function WorkoutStrip({ type, draftWorkout }) {
   // Stylised structure block to make the workout tangible.
   // Just visual rhythm — not exact zones.
-  const blocks = {
+  const draftBlocks = Array.isArray(draftWorkout?.blocks) && draftWorkout.blocks.length
+    ? draftWorkout.blocks.map((block) => [block.short || block.label || 'Blok', Math.max(0.5, (block.sec || 0) / 60), zoneNumber(block.zone)])
+    : null;
+  const blocks = draftBlocks || {
     HERSTEL:   [['WU', 5, 1], ['Easy', 30, 2], ['CD', 5, 1]],
     DUUR:      [['WU', 8, 1], ['Zone 2', 45, 2], ['CD', 7, 1]],
     THRESHOLD: [['WU', 10, 1], ['Tempo', 12, 4], ['Rust', 4, 1], ['Tempo', 12, 4], ['CD', 8, 1]],
@@ -253,6 +256,39 @@ function WorkoutStrip({ type }) {
       </div>
     </div>
   );
+}
+
+function dashboardRecommendationFromDraft(draftWorkout, recoveryScore) {
+  const base = window.FC_DATA.recommendedByRecovery[recoveryScore] || window.FC_DATA.recommendedByRecovery[4];
+  if (!draftWorkout || !window.FC_WORKOUT_PLAN) return base;
+  const fallbackByType = Object.values(window.FC_DATA.recommendedByRecovery)
+    .find((item) => item.type === draftWorkout.type) || base;
+  const duration = draftWorkout.durationMin
+    || Math.round((draftWorkout.blocks || []).reduce((sum, block) => sum + (block.sec || 0), 0) / 60)
+    || fallbackByType.duration;
+  return {
+    ...fallbackByType,
+    type: draftWorkout.type || fallbackByType.type,
+    dutch: window.FC_WORKOUT_PLAN.typeLabel(draftWorkout.type) || fallbackByType.dutch,
+    sport: window.FC_WORKOUT_PLAN.sportLabel(draftWorkout.sportType) || fallbackByType.sport,
+    duration,
+    desc: descriptionForDraft(draftWorkout, fallbackByType),
+  };
+}
+
+function descriptionForDraft(draftWorkout, fallback) {
+  if (draftWorkout?.note && draftWorkout.source === 'coach') return draftWorkout.note;
+  if (draftWorkout?.type === 'THRESHOLD') return 'Drempeltraining op basis van je huidige coachvoorstel.';
+  if (draftWorkout?.type === 'DUUR') return 'Comfortabele duurtraining in zone 2.';
+  if (draftWorkout?.type === 'HERSTEL') return 'Rustige herstelsessie met lage belasting.';
+  if (draftWorkout?.type === 'VO2MAX') return 'Korte intensieve blokken met volledig herstel.';
+  if (draftWorkout?.type === 'SPRINT') return 'Korte sprintprikkels met ruime pauzes.';
+  return fallback.desc;
+}
+
+function zoneNumber(zone) {
+  const match = String(zone || '').match(/\d+/);
+  return match ? Number(match[0]) : 2;
 }
 
 function MetricStat({ label, value, unit, sub, ring, ringClass }) {
