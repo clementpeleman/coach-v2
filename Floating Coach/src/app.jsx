@@ -358,7 +358,7 @@ function isLegacyDemoChat(messages) {
 function currentReadinessScore(score, metrics, live) {
   if (!live || !metrics || score == null) return score;
   let adjusted = score;
-  const currentBattery = metrics.bodyBatteryCurrent ?? metrics.bodyBattery;
+  const currentBattery = metrics.bodyBatteryCurrent;
   const trainingPenalty = metrics.recentTrainingPenalty || 0;
 
   if (currentBattery != null) {

@@ -2178,11 +2178,7 @@ async def get_recovery_snapshot(
         avg_stress = round(sum(stress_values) / len(stress_values)) if stress_values else None
         body_battery_at_wake = _body_battery_at_wake(stress, sleep)
         body_battery_current = round(body_battery_values[-1]) if body_battery_values else None
-        body_battery_for_score = (
-            body_battery_current
-            if body_battery_current is not None
-            else body_battery_at_wake
-        )
+        body_battery_for_score = body_battery_current
         hrv_overnight = (
             int(hrv.get("lastNightAvg"))
             if isinstance(hrv.get("lastNightAvg"), (int, float))
@@ -2214,7 +2210,7 @@ async def get_recovery_snapshot(
             "calendar_date": calendar_date,
             "score": score,
             "score_model": {
-                "version": "health_plus_recent_training_v1",
+                "version": "current_readiness_v2",
                 "scale": "0-6",
                 "notes": [
                     "Health signals use sleep, stress, current Body Battery and HRV.",
@@ -2233,6 +2229,7 @@ async def get_recovery_snapshot(
                 "bodyBattery": body_battery_for_score,
                 "bodyBatteryAtWake": body_battery_at_wake,
                 "bodyBatteryCurrent": body_battery_current,
+                "bodyBatteryScoreSource": "current" if body_battery_current is not None else None,
                 "hrvOvernight": hrv_overnight,
                 "restingHr": daily.get("restingHeartRateInBeatsPerMinute"),
                 "currentHeartRate": current_hr,
