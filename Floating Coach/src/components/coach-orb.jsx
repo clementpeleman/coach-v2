@@ -4,7 +4,7 @@ const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
 function CoachOrb({
   recoveryScore, recoveryData, weather, onNavigateChat, currentScreen, apiStatus, userId,
-  trainingProfile, messages, setMessages, thinking, setThinking,
+  trainingProfile, draftWorkout, setDraftWorkout, messages, setMessages, thinking, setThinking,
 }) {
   const online = apiStatus === 'online';
   const R = recoveryData || window.FC_DATA.recovery;
@@ -28,6 +28,21 @@ function CoachOrb({
 
     if (online && userId) {
       try {
+        let contextDraft = draftWorkout;
+        if (window.FC_API.adjustTrainingRecommendation && (draftWorkout || window.FC_WORKOUT_PLAN)) {
+          try {
+            const adjusted = await window.FC_API.adjustTrainingRecommendation({
+              userId,
+              recommendation: draftWorkout || window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore, trainingProfile }),
+              instruction: text,
+              trainingProfile,
+            });
+            if (adjusted?.changedByInstruction) {
+              contextDraft = adjusted;
+              setDraftWorkout?.(() => adjusted);
+            }
+          } catch (_) {}
+        }
         const res = await window.FC_API.sendChatMessage({
           userId, message: text,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
@@ -38,9 +53,12 @@ function CoachOrb({
               label: recoveryLabel(recoveryScore),
               metrics: R,
             },
+            training_profile: trainingProfile || null,
             workout_patterns: trainingProfile?.workout_patterns || null,
+            draft_workout: contextDraft || null,
           },
         });
+        if (res.draft_workout) setDraftWorkout?.(() => res.draft_workout);
         setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);
       } catch (e) {
         setMessages((m) => [...m, { role: 'assistant',

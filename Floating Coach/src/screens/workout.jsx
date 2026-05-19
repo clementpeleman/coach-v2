@@ -59,6 +59,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
   const [selectedBlockIndex, setSelectedBlockIndex] = useStateW(0);
   const [editedBlocks, setEditedBlocks] = useStateW([]);
   const [manualEdits, setManualEdits] = useStateW(false);
+  const [delivery, setDelivery] = useStateW({ status: 'idle', workoutId: null, message: null, error: null });
   useEffectW(() => {
     if (!sportTouched && patternSportKey) setSportType(patternSportKey);
   }, [patternSportKey, sportTouched]);
@@ -113,6 +114,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
     setEditedBlocks(defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index)));
     setSelectedBlockIndex(0);
     setManualEdits(false);
+    setDelivery({ status: 'idle', workoutId: null, message: null, error: null });
   }, [defaultBlocksKey]);
   const blocks = editedBlocks.length ? editedBlocks : defaultBlocks.map((block, index) => cloneWorkoutBlock(block, index));
   const totalSec = blocks.reduce((s, b) => s + b.sec, 0);
@@ -190,6 +192,51 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
       updatedAt: new Date().toISOString(),
       ...patch,
     }));
+  };
+  const currentRecommendation = () => ({
+    ...(draftWorkout || {}),
+    type: rec.type,
+    sportType,
+    durationMin: Math.round(blocks.reduce((sum, block) => sum + block.sec, 0) / 60),
+    targetMode: visibleTargetMode,
+    preferredTargetMode: visibleTargetMode,
+    intensityPct,
+    blocks,
+    status: 'approved',
+    source: draftWorkout?.source || 'workout-editor',
+    warnings: targetWarnings,
+    updatedAt: new Date().toISOString(),
+  });
+  const ensureSavedWorkout = async () => {
+    if (!userId) throw new Error('Login met Garmin is nodig om deze workout op te slaan.');
+    if (delivery.workoutId) return delivery.workoutId;
+    setDelivery({ status: 'saving', workoutId: null, message: 'Workout wordt opgeslagen...', error: null });
+    const saved = await window.FC_API.createTrainingWorkout({
+      userId,
+      recommendation: currentRecommendation(),
+      status: 'approved',
+    });
+    setDelivery({ status: 'saved', workoutId: saved.workout_id, message: 'Workout opgeslagen.', error: null });
+    return saved.workout_id;
+  };
+  const downloadFit = async () => {
+    try {
+      const workoutId = await ensureSavedWorkout();
+      setDelivery((current) => ({ ...current, status: 'fit_ready', message: 'FIT-bestand wordt geopend...', error: null }));
+      window.location.href = window.FC_API.getTrainingWorkoutFitUrl(workoutId);
+    } catch (e) {
+      setDelivery((current) => ({ ...current, status: 'error', error: e.message, message: null }));
+    }
+  };
+  const uploadToGarmin = async () => {
+    try {
+      const workoutId = await ensureSavedWorkout();
+      setDelivery((current) => ({ ...current, status: 'uploading', message: 'Upload naar Garmin Connect...', error: null }));
+      const uploaded = await window.FC_API.uploadTrainingWorkoutToGarmin(workoutId);
+      setDelivery({ status: 'uploaded', workoutId, message: `Verzonden naar Garmin (${uploaded.garmin?.workoutId || 'ok'}).`, error: null });
+    } catch (e) {
+      setDelivery((current) => ({ ...current, status: 'error', error: e.message, message: null }));
+    }
   };
   const openCoachEditor = () => {
     const workoutSummary = adjustedBlocks.map((block, index) => {
@@ -643,10 +690,24 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                 </div>
               </div>
             </div>
-            <button className="btn" style={{ marginTop: 14, width: '100%', justifyContent: 'center' }}>
+            {(delivery.message || delivery.error) && (
+              <div className="mono" style={{
+                marginTop: 12,
+                fontSize: 11,
+                color: delivery.error ? 'var(--bad)' : 'var(--ink-3)',
+                lineHeight: 1.35,
+              }}>
+                {delivery.error || delivery.message}
+              </div>
+            )}
+            <button className="btn" onClick={uploadToGarmin}
+              disabled={['saving', 'uploading'].includes(delivery.status)}
+              style={{ marginTop: 14, width: '100%', justifyContent: 'center' }}>
               Stuur naar Garmin Connect <span className="arrow">↑</span>
             </button>
-            <button className="btn ghost" style={{ marginTop: 6, width: '100%', justifyContent: 'center' }}>
+            <button className="btn ghost" onClick={downloadFit}
+              disabled={['saving', 'uploading'].includes(delivery.status)}
+              style={{ marginTop: 6, width: '100%', justifyContent: 'center' }}>
               Download FIT-bestand
             </button>
           </div>

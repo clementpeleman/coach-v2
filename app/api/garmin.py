@@ -1,13 +1,16 @@
 """Garmin OAuth2 and webhook API endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import logging
 import requests
 import time
 import json
 import re
+import os
 from datetime import datetime, timedelta
 
 from app.config import settings
@@ -21,6 +24,14 @@ from app.database.models import (
     GarminToken,
     GarminWebhookEvent,
     OAuthSession,
+    WorkoutHistory,
+)
+from app.tools.training_recommendation_engine import (
+    adjust_recommendation,
+    build_recommendation,
+    garmin_sport_type,
+    recommendation_to_workout_steps,
+    workout_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +60,19 @@ CORE_HEALTH_BACKFILL_TYPES = ["dailies", "sleeps", "stressDetails", "hrv"]
 REQUIRED_EXPORT_PERMISSIONS = {"ACTIVITY_EXPORT", "HISTORICAL_DATA_EXPORT"}
 INITIAL_ACTIVITY_BACKFILL_DAYS = 30
 INITIAL_HEALTH_BACKFILL_DAYS = 7
+
+
+class RecommendationAdjustRequest(BaseModel):
+    user_id: int
+    recommendation: Dict[str, Any] = Field(default_factory=dict)
+    instruction: str
+    training_profile: Optional[Dict[str, Any]] = None
+
+
+class WorkoutCreateRequest(BaseModel):
+    user_id: int
+    recommendation: Dict[str, Any]
+    status: str = "approved"
 
 
 def resolve_user_id(user_id: Optional[int], telegram_user_id: Optional[int]) -> int:
@@ -2155,6 +2179,245 @@ async def training_profile(
     except Exception as e:
         logger.error(f"Training profile failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _training_context(db: Session, user_id: int, days: int = 120, current_days: int = 7) -> Dict[str, Any]:
+    now = datetime.utcnow()
+    start_date = now - timedelta(days=max(days, current_days + 28))
+    activities = db.query(GarminActivityData).filter(
+        GarminActivityData.user_id == user_id,
+        GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
+        GarminActivityData.start_time >= start_date,
+    ).order_by(GarminActivityData.start_time.desc()).all()
+    activity_details = db.query(GarminActivityAuxiliaryData).filter(
+        GarminActivityAuxiliaryData.user_id == user_id,
+        GarminActivityAuxiliaryData.summary_type == "activityDetails",
+        or_(
+            GarminActivityAuxiliaryData.start_time >= start_date,
+            GarminActivityAuxiliaryData.start_time.is_(None),
+        ),
+    ).order_by(GarminActivityAuxiliaryData.start_time.desc()).all()
+    return {
+        "period_days": days,
+        "current_days": current_days,
+        "generated_at": now.isoformat(),
+        "personal_targets": build_personal_training_profile(activities, activity_details),
+        "sport_baselines": build_sport_baselines(activities, current_days, now),
+        "workout_patterns": build_workout_patterns(activities, activity_details),
+    }
+
+
+@router.get("/training/recommendation")
+async def training_recommendation(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    days: int = Query(120, ge=30, le=365),
+    current_days: int = Query(7, ge=1, le=30),
+    temperature_c: Optional[float] = Query(None),
+    wind_speed_kmh: Optional[float] = Query(None),
+    condition: Optional[str] = Query(None),
+    training_note: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Return the canonical backend-owned workout recommendation for the app."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        training = _training_context(db, resolved_user_id, days, current_days)
+        recovery = await get_recovery_snapshot(user_id=resolved_user_id, db=db)
+        weather = {
+            "temperature_c": temperature_c,
+            "wind_speed_kmh": wind_speed_kmh,
+            "condition": condition,
+            "training_note": training_note,
+        } if any(value is not None for value in [temperature_c, wind_speed_kmh, condition, training_note]) else None
+        return build_recommendation(
+            user_id=resolved_user_id,
+            recovery=recovery,
+            training_profile=training,
+            weather=weather,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Training recommendation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/training/recommendation/adjust")
+async def adjust_training_recommendation(
+    payload: RecommendationAdjustRequest,
+    db: Session = Depends(get_db),
+):
+    """Apply a deterministic coach/user instruction to a recommendation draft."""
+    try:
+        training = payload.training_profile or _training_context(db, payload.user_id)
+        return adjust_recommendation(
+            payload.recommendation,
+            payload.instruction,
+            training_profile=training,
+        )
+    except Exception as e:
+        logger.error(f"Training recommendation adjustment failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/training/workouts")
+async def create_training_workout(
+    payload: WorkoutCreateRequest,
+    db: Session = Depends(get_db),
+):
+    """Persist an approved workout recommendation in existing workout history."""
+    try:
+        recommendation = payload.recommendation
+        if not recommendation.get("blocks"):
+            raise HTTPException(status_code=422, detail="recommendation.blocks is required")
+        name = workout_name(recommendation)
+        data = {
+            "recommendation": recommendation,
+            "delivery": {
+                "status": payload.status,
+                "fit_file_path": None,
+                "garmin": None,
+            },
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        entry = WorkoutHistory(
+            user_id=payload.user_id,
+            workout_type=recommendation.get("type") or "CUSTOM",
+            workout_name=name,
+            created_at=datetime.utcnow(),
+            recovery_score_before=recommendation.get("recoveryScore"),
+            fit_file_path=None,
+            workout_data=json.dumps(data),
+        )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
+        return {
+            "status": "saved",
+            "workout_id": entry.id,
+            "workout_name": entry.workout_name,
+            "fit_url": f"/garmin/training/workouts/{entry.id}/fit",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create training workout failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_workout_history(db: Session, workout_id: int) -> WorkoutHistory:
+    entry = db.query(WorkoutHistory).filter(WorkoutHistory.id == workout_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Workout not found")
+    return entry
+
+
+def _history_payload(entry: WorkoutHistory) -> Dict[str, Any]:
+    try:
+        return json.loads(entry.workout_data or "{}")
+    except Exception:
+        return {}
+
+
+def _set_history_payload(db: Session, entry: WorkoutHistory, payload: Dict[str, Any]) -> None:
+    entry.workout_data = json.dumps(payload)
+    db.commit()
+    db.refresh(entry)
+
+
+@router.get("/training/workouts/{workout_id}/fit")
+async def download_training_workout_fit(
+    workout_id: int,
+    db: Session = Depends(get_db),
+):
+    """Create or return a FIT file for a stored workout recommendation."""
+    try:
+        entry = _get_workout_history(db, workout_id)
+        payload = _history_payload(entry)
+        recommendation = payload.get("recommendation") or {}
+        if not recommendation.get("blocks"):
+            raise HTTPException(status_code=422, detail="Stored workout has no recommendation blocks")
+        if not entry.fit_file_path or not os.path.exists(entry.fit_file_path):
+            from app.tools.workout_tools import create_fit_file
+
+            fit_path = create_fit_file(
+                user_id=None,
+                workout_steps=recommendation_to_workout_steps(recommendation),
+                workout_type=recommendation.get("type") or entry.workout_type,
+                sport=garmin_sport_type(recommendation.get("sportType")),
+                recovery_score=entry.recovery_score_before,
+            )
+            entry.fit_file_path = fit_path
+            payload.setdefault("delivery", {})["status"] = "fit_ready"
+            payload["delivery"]["fit_file_path"] = fit_path
+            _set_history_payload(db, entry, payload)
+        filename = f"{entry.workout_name.lower().replace(' ', '_')}.fit"
+        return FileResponse(
+            entry.fit_file_path,
+            media_type="application/octet-stream",
+            filename=filename,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"FIT generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"fit_error: {e}")
+
+
+@router.post("/training/workouts/{workout_id}/garmin")
+async def upload_training_workout_to_garmin(
+    workout_id: int,
+    db: Session = Depends(get_db),
+):
+    """Upload a stored workout to Garmin Connect when WORKOUT_IMPORT is granted."""
+    try:
+        entry = _get_workout_history(db, workout_id)
+        payload = _history_payload(entry)
+        recommendation = payload.get("recommendation") or {}
+        if not recommendation.get("blocks"):
+            raise HTTPException(status_code=422, detail="invalid_workout")
+
+        from app.tools.garmin_training_api import GarminTrainingAPIClient
+        from app.tools.garmin_workout_converter import convert_workout_to_garmin_json
+
+        try:
+            training_client = GarminTrainingAPIClient(db, entry.user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=401, detail=f"token_expired: {exc}") from exc
+
+        try:
+            permissions = extract_permission_names(training_client.check_permissions())
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"garmin_error: permission check failed: {exc}") from exc
+        if "WORKOUT_IMPORT" not in permissions:
+            raise HTTPException(status_code=403, detail="permission_missing: WORKOUT_IMPORT")
+
+        workout_json = convert_workout_to_garmin_json(
+            workout_name=entry.workout_name,
+            workout_type=recommendation.get("type") or entry.workout_type,
+            workout_steps=recommendation_to_workout_steps(recommendation),
+            description="Floating Coach workout",
+            sport=garmin_sport_type(recommendation.get("sportType")),
+        )
+        try:
+            result = training_client.create_workout(workout_json)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"garmin_error: {exc}") from exc
+
+        payload.setdefault("delivery", {})["status"] = "uploaded"
+        payload["delivery"]["garmin"] = result
+        _set_history_payload(db, entry, payload)
+        return {
+            "status": "uploaded",
+            "workout_id": entry.id,
+            "garmin": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Garmin workout upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"garmin_error: {e}")
 
 
 @router.get("/recovery")

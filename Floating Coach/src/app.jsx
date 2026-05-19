@@ -25,7 +25,9 @@ function App() {
   const [chatMessages, setChatMessages] = useStateApp(() => readStoredChat(chatStorageKey));
   const [chatThinking, setChatThinking] = useStateApp(false);
   const [draftWorkout, setDraftWorkout] = useStateApp(() => (
-    window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore: DEFAULT_RECOVERY, trainingProfile: null })
+    session.userId
+      ? readAppLiveCache(`training_recommendation_${session.userId}`)?.data || null
+      : window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore: DEFAULT_RECOVERY, trainingProfile: null })
   ));
   const resetChat = () => {
     setChatMessages(window.FC_DATA.chatSeed);
@@ -88,24 +90,52 @@ function App() {
   }, [chatStorageKey, chatMessages]);
 
   useEffectApp(() => {
-    if (!window.FC_WORKOUT_PLAN) return;
-    setDraftWorkout((current) => {
-      const shouldRefreshAutoDraft = !current || (
-        current.source === 'auto'
-        && current.status !== 'approved'
-        && (
-          current.recoveryScore !== recoveryScore
-          || (trainingProfile && !current.profileApplied)
-        )
-      );
-      if (!shouldRefreshAutoDraft) return current;
-      return {
-        ...window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore, trainingProfile }),
-        recoveryScore,
-        profileApplied: Boolean(trainingProfile),
+    if (!session.userId) {
+      if (!window.FC_WORKOUT_PLAN) return;
+      setDraftWorkout((current) => (
+        current && current.source === 'auto'
+          ? current
+          : window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore, trainingProfile: null })
+      ));
+      return;
+    }
+
+    const cacheKey = `training_recommendation_${session.userId}`;
+    const canReplace = (current) => !current || (
+      ['auto', 'backend', 'stale-live'].includes(current.source)
+      && current.status !== 'approved'
+    );
+    const cached = readAppLiveCache(cacheKey);
+    if (cached?.data) {
+      setDraftWorkout((current) => canReplace(current)
+        ? { ...cached.data, source: cached.data.source || 'backend', dataSource: 'stale-live' }
+        : current);
+    }
+    if (apiStatus.status !== 'online') return;
+
+    let cancelled = false;
+    window.FC_API.fetchTrainingRecommendation(session.userId, weather).then((recommendation) => {
+      const updatedAt = new Date().toISOString();
+      const liveRecommendation = {
+        ...recommendation,
+        source: recommendation.source || 'backend',
+        dataSource: 'live',
+        updatedAt: recommendation.updatedAt || updatedAt,
       };
+      writeAppLiveCache(cacheKey, liveRecommendation, updatedAt);
+      if (!cancelled) {
+        setDraftWorkout((current) => canReplace(current) ? liveRecommendation : current);
+      }
+    }).catch((e) => {
+      const fallback = readAppLiveCache(cacheKey);
+      if (!cancelled && fallback?.data) {
+        setDraftWorkout((current) => canReplace(current)
+          ? { ...fallback.data, source: fallback.data.source || 'backend', dataSource: 'stale-live', error: e.message }
+          : current);
+      }
     });
-  }, [recoveryScore, trainingProfile]);
+    return () => { cancelled = true; };
+  }, [apiStatus.status, session.userId, recoveryScore, trainingProfile?._updatedAt, weather?.observed_at]);
 
   useEffectApp(() => {
     window.FC_SET_DRAFT_WORKOUT = (updater) => setDraftWorkout(updater);

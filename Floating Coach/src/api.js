@@ -103,6 +103,35 @@
   function fetchTrainingProfile(userId, days = 120, currentDays = 7) {
     return getJson(`/garmin/training/profile?user_id=${userId}&days=${days}&current_days=${currentDays}`);
   }
+  function fetchTrainingRecommendation(userId, weather) {
+    const params = new URLSearchParams({ user_id: String(userId) });
+    if (weather?.temperature_c != null) params.set('temperature_c', String(weather.temperature_c));
+    if (weather?.wind_speed_kmh != null) params.set('wind_speed_kmh', String(weather.wind_speed_kmh));
+    if (weather?.condition) params.set('condition', weather.condition);
+    if (weather?.training_note) params.set('training_note', weather.training_note);
+    return getJson(`/garmin/training/recommendation?${params.toString()}`);
+  }
+  function adjustTrainingRecommendation({ userId, recommendation, instruction, trainingProfile }) {
+    return postJson('/garmin/training/recommendation/adjust', {
+      user_id: userId,
+      recommendation: recommendation || {},
+      instruction,
+      training_profile: trainingProfile || null,
+    });
+  }
+  function createTrainingWorkout({ userId, recommendation, status = 'approved' }) {
+    return postJson('/garmin/training/workouts', {
+      user_id: userId,
+      recommendation,
+      status,
+    });
+  }
+  function getTrainingWorkoutFitUrl(workoutId) {
+    return `${getBaseUrl()}/garmin/training/workouts/${workoutId}/fit`;
+  }
+  function uploadTrainingWorkoutToGarmin(workoutId) {
+    return postJson(`/garmin/training/workouts/${workoutId}/garmin`, {});
+  }
 
   // ---- Web user ----
   function loginWebUser(email, displayName) {
@@ -126,7 +155,9 @@
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
     fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
-    fetchTrainingProfile, fetchWeather,
+    fetchTrainingProfile, fetchTrainingRecommendation, adjustTrainingRecommendation,
+    createTrainingWorkout, getTrainingWorkoutFitUrl, uploadTrainingWorkoutToGarmin,
+    fetchWeather,
     loginWebUser, fetchWebUser,
     sendChatMessage,
   };

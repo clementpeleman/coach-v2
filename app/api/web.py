@@ -1,7 +1,7 @@
 """Web app endpoints for auth and chat."""
 import logging
 from datetime import date, datetime, timedelta
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -51,6 +51,8 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    draft_workout: Optional[dict[str, Any]] = None
+    workout_patch: Optional[dict[str, Any]] = None
 
 
 class WeatherResponse(BaseModel):
@@ -343,8 +345,37 @@ async def web_chat(payload: ChatRequest):
             user_id=payload.user_id, current_date=date.today().isoformat()
         )
         message = payload.message
+        draft_workout = None
+        workout_patch = None
         if payload.context:
             context_lines = []
+            current_draft = payload.context.get("draft_workout") if isinstance(payload.context, dict) else None
+            training_profile = payload.context.get("training_profile") if isinstance(payload.context, dict) else None
+            if isinstance(current_draft, dict):
+                try:
+                    from app.tools.training_recommendation_engine import adjust_recommendation
+
+                    adjusted = adjust_recommendation(
+                        current_draft,
+                        payload.message,
+                        training_profile=training_profile if isinstance(training_profile, dict) else None,
+                    )
+                    if adjusted.get("changedByInstruction"):
+                        draft_workout = adjusted
+                        workout_patch = {
+                            "type": adjusted.get("type"),
+                            "sportType": adjusted.get("sportType"),
+                            "durationMin": adjusted.get("durationMin"),
+                            "intensityPct": adjusted.get("intensityPct"),
+                            "targetMode": adjusted.get("targetMode"),
+                        }
+                        context_lines.append(
+                            "Workoutvoorstel is alvast structured aangepast op basis van de gebruikersvraag. "
+                            f"Nieuw voorstel: {adjusted.get('type')} {adjusted.get('sportType')} "
+                            f"{adjusted.get('durationMin')} min, intensiteit {adjusted.get('intensityPct')}%."
+                        )
+                except Exception as exc:
+                    logger.warning("Structured workout adjustment failed: %s", exc)
             recovery = payload.context.get("recovery") if isinstance(payload.context, dict) else None
             if recovery:
                 metrics = recovery.get("metrics") if isinstance(recovery.get("metrics"), dict) else {}
@@ -403,6 +434,6 @@ async def web_chat(payload: ChatRequest):
                 )
 
         result = agent_executor.invoke({"input": message, "chat_history": chat_history})
-        return ChatResponse(reply=result["output"])
+        return ChatResponse(reply=result["output"], draft_workout=draft_workout, workout_patch=workout_patch)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

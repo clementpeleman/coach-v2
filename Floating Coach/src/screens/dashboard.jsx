@@ -9,7 +9,15 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
     ? new Date(`${recoverySnapshot.calendar_date}T12:00:00`)
     : new Date();
   const online = apiStatus === 'online';
-  const rec = dashboardRecommendationFromDraft(draftWorkout, recoveryScore);
+  const rec = userId && !draftWorkout
+    ? {
+        type: 'LIVE',
+        dutch: 'Voorstel laden',
+        sport: 'Garmin live',
+        duration: '–',
+        desc: 'Ik haal je officiële coachvoorstel op bij de backend.',
+      }
+    : dashboardRecommendationFromDraft(draftWorkout, recoveryScore);
 
   // Live data: logged-in users keep stale live data instead of silently seeing demo.
   const activitiesQuery = window.useLiveData(
@@ -80,7 +88,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
           padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
           <span className="live-dot" style={{ background: 'oklch(72% 0.16 60)' }}></span>
           <div style={{ flex: 1, fontSize: 13, color: 'oklch(35% 0.10 50)' }}>
-            <b>Demo data getoond.</b> Backend onbereikbaar:
+            <b>{activitiesQuery.source === 'stale-live' ? 'Laatste live data getoond.' : (userId ? 'Live data tijdelijk niet beschikbaar.' : 'Demo data getoond.')}</b> Backend onbereikbaar:
             <span className="mono" style={{ marginLeft: 6, fontSize: 12 }}>{activitiesQuery.error}</span>
           </div>
           <button className="btn ghost" style={{ padding: '6px 12px', fontSize: 12 }}
