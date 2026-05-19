@@ -15,6 +15,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
   const bodyBatteryDisplay = bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery ?? null;
   const bodyBatterySub = bodyBatteryAtWake == null && bodyBatteryDisplay != null ? "huidig" : "bij ontwaken";
   const hasRecentTraining = R.recentTrainingLoad != null || Boolean(R.hardestRecentActivity);
+  const scoreBreakdown = buildRecoveryScoreBreakdown(recoveryScore, R, recoverySnapshot);
 
   return (
     <div data-screen-label="Recovery assessment" className="col" style={{ gap: 24 }}>
@@ -118,20 +119,23 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
       {/* Inputs into the score */}
       <div className="grid-4">
         <InputCard label="Slaap" value={`${R.sleepScore ?? '–'}`} unit={R.sleepScore == null ? "" : "/100"}
-          sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u totaal` : "Geen slaapdata"} contribution={28} />
+          sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u totaal` : "Geen slaapdata"}
+          impact={scoreBreakdown.impacts.sleep} />
         <InputCard label="HRV overnacht" value={`${R.hrvOvernight ?? '–'}`} unit={R.hrvOvernight == null ? "" : "ms"}
-          sub="bij gemiddelde" contribution={24} trend="flat" />
+          sub="bij gemiddelde" impact={scoreBreakdown.impacts.hrv} trend="flat" />
         <InputCard label="Stress (avg 24h)" value={`${R.avgStress ?? '–'}`} unit={R.avgStress == null ? "" : "/100"}
-          sub="laag-gemiddeld" contribution={22} trend="down" />
+          sub="laag-gemiddeld" impact={scoreBreakdown.impacts.stress} trend="down" />
         <InputCard label="Body Battery" value={`${bodyBatteryDisplay ?? '–'}`} unit={bodyBatteryDisplay == null ? "" : "%"}
-          sub={bodyBatterySub} contribution={26} trend="up" />
+          sub={bodyBatterySub} impact={scoreBreakdown.impacts.bodyBattery} trend="up" />
         {hasRecentTraining && (
           <InputCard label="Recente training" value={`${R.recentTrainingLoad ?? '–'}`} unit={R.recentTrainingLoad == null ? "" : "load"}
             sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel}` : "Laatste 48 uur"}
-            contribution={Math.min(100, Math.round((R.recentTrainingPenalty || 0) * 45))}
+            impact={scoreBreakdown.impacts.recentTraining}
             trend={(R.recentTrainingPenalty || 0) >= 0.8 ? "down" : "flat"} />
         )}
       </div>
+
+      <ScoreBreakdownCard breakdown={scoreBreakdown} bodyBatteryAtWake={bodyBatteryAtWake} />
 
       {R.hardestRecentActivity && (
         <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -161,8 +165,369 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
   );
 }
 
-function InputCard({ label, value, unit, sub, contribution, trend }) {
+function buildRecoveryScoreBreakdown(recoveryScore, metrics = {}, snapshot = {}) {
+  const model = snapshot?.score_model || {};
+  const inputs = model.inputs || snapshot?.scoreInputs || {};
+  const hasScoreInputs = Boolean(model.inputs || snapshot?.scoreInputs);
+  const staleSignals = model.stale_signals || snapshot?.staleSignals || [];
+  const confidence = model.confidence || snapshot?.scoreConfidence || 'medium';
+  const version = model.version || 'current_readiness_v3';
+  const rows = [];
+  const impacts = {
+    sleep: null,
+    stress: null,
+    bodyBattery: null,
+    hrv: null,
+    recentTraining: null,
+  };
+  let rawScore = 3.0;
+
+  const addRow = (key, label, value, formula, delta, note) => {
+    if (typeof delta === 'number' && Number.isFinite(delta)) {
+      rawScore += delta;
+      impacts[key] = delta;
+    }
+    rows.push({ key, label, value, formula, delta, note });
+  };
+
+  const sleepScore = numberOrNull(inputs.sleepScore ?? metrics.sleepScore);
+  const sleepHours = numberOrNull(inputs.sleepHours ?? metrics.sleepHours);
+  if (sleepScore != null) {
+    addRow(
+      'sleep',
+      'Slaapscore',
+      `${Math.round(sleepScore)}/100`,
+      `(${Math.round(sleepScore)} - 70) / 15`,
+      (sleepScore - 70) / 15,
+      'Slaapscore krijgt voorrang op alleen slaapduur.',
+    );
+  } else if (sleepHours != null) {
+    addRow(
+      'sleep',
+      'Slaapduur',
+      `${sleepHours.toFixed(1)}u`,
+      `(${sleepHours.toFixed(1)} - 7.0) / 1.5`,
+      (sleepHours - 7) / 1.5,
+      'Geen slaapscore gevonden, daarom telt duur mee.',
+    );
+  } else {
+    addRow('sleep', 'Slaap', 'ontbreekt', 'niet meegeteld', null, 'Geen slaapscore of slaapduur beschikbaar.');
+  }
+
+  const avgStress = numberOrNull(inputs.avgStress ?? metrics.avgStress);
+  if (avgStress != null) {
+    addRow(
+      'stress',
+      'Stress 24u',
+      `${Math.round(avgStress)}/100`,
+      `(45 - ${Math.round(avgStress)}) / 20`,
+      (45 - avgStress) / 20,
+      'Lager dan 45 helpt, hoger dan 45 drukt de score.',
+    );
+  } else {
+    addRow('stress', 'Stress 24u', 'ontbreekt', 'niet meegeteld', null, 'Geen recente stressreeks beschikbaar.');
+  }
+
+  const bodyBatteryCurrent = numberOrNull(
+    hasScoreInputs ? inputs.bodyBatteryCurrent : (inputs.bodyBatteryCurrent ?? metrics.bodyBatteryCurrent ?? metrics.bodyBattery),
+  );
+  const measuredBodyBatteryCurrent = numberOrNull(metrics.bodyBatteryCurrent ?? metrics.bodyBattery);
+  if (bodyBatteryCurrent != null) {
+    addRow(
+      'bodyBattery',
+      'Body Battery huidig',
+      `${Math.round(bodyBatteryCurrent)}%`,
+      `(${Math.round(bodyBatteryCurrent)} - 50) / 25`,
+      (bodyBatteryCurrent - 50) / 25,
+      'Dit is de huidige waarde. Body Battery bij ontwaken is alleen display.',
+    );
+  } else {
+    const staleNote = staleSignals.some((signal) => String(signal).startsWith('bodyBatteryCurrent_'))
+      ? 'Huidige Body Battery is stale of ontbreekt en telt daarom niet mee.'
+      : 'Geen huidige Body Battery beschikbaar voor de score.';
+    addRow(
+      'bodyBattery',
+      'Body Battery huidig',
+      measuredBodyBatteryCurrent != null ? `${Math.round(measuredBodyBatteryCurrent)}% gemeten` : 'ontbreekt',
+      'niet meegeteld',
+      null,
+      staleNote,
+    );
+  }
+
+  const hrv = numberOrNull(inputs.hrvOvernight ?? metrics.hrvOvernight);
+  if (hrv != null) {
+    addRow(
+      'hrv',
+      'HRV overnacht',
+      `${Math.round(hrv)} ms`,
+      `(${Math.round(hrv)} - 45) / 35`,
+      (hrv - 45) / 35,
+      'Zonder persoonlijke baseline is dit bewust een kleinere stabiliserende factor.',
+    );
+  } else {
+    addRow('hrv', 'HRV overnacht', 'ontbreekt', 'niet meegeteld', null, 'Geen HRV-samenvatting beschikbaar.');
+  }
+
+  const recentTrainingPenalty = numberOrNull(inputs.recentTrainingPenalty ?? metrics.recentTrainingPenalty) || 0;
+  addRow(
+    'recentTraining',
+    'Recente training',
+    recentTrainingPenalty > 0 ? `${recentTrainingPenalty.toFixed(1)} punt` : 'geen penalty',
+    recentTrainingPenalty > 0 ? `-${recentTrainingPenalty.toFixed(1)}` : '0',
+    -recentTrainingPenalty,
+    'Belasting van de laatste 48 uur verlaagt je readiness tijdelijk.',
+  );
+
+  const rounded = clampRecoveryScore(Math.round(rawScore));
+  const caps = recoveryCaps(bodyBatteryCurrent, recentTrainingPenalty);
+  if (bodyBatteryCurrent == null && recentTrainingPenalty >= 0.4) {
+    caps.push({
+      label: 'Body Battery huidig ontbreekt of is stale bij recente belasting',
+      max: 3,
+    });
+  }
+  const capped = caps.reduce((score, cap) => Math.min(score, cap.max), rounded);
+  const finalScore = hasScoreInputs && Number.isFinite(recoveryScore) ? recoveryScore : capped;
+
+  return {
+    base: 3.0,
+    rows,
+    impacts,
+    rawScore,
+    rounded,
+    capped,
+    finalScore,
+    caps,
+    confidence,
+    staleSignals,
+    version,
+    hasScoreInputs,
+  };
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function clampRecoveryScore(value) {
+  return Math.max(0, Math.min(6, value));
+}
+
+function recoveryCaps(bodyBatteryCurrent, recentTrainingPenalty) {
+  const caps = [];
+  if (bodyBatteryCurrent != null) {
+    if (bodyBatteryCurrent <= 15) {
+      caps.push({ label: 'Body Battery huidig <= 15', max: 2 });
+    } else if (bodyBatteryCurrent <= 25) {
+      caps.push({ label: 'Body Battery huidig <= 25', max: 3 });
+    } else if (bodyBatteryCurrent <= 35 && recentTrainingPenalty >= 0.8) {
+      caps.push({ label: 'Body Battery huidig <= 35 met recente belasting', max: 3 });
+    }
+  }
+  if (recentTrainingPenalty >= 1.1) {
+    caps.push({ label: 'Zware recente sessie binnen 48 uur', max: 3 });
+  }
+  if (recentTrainingPenalty >= 1.1 && bodyBatteryCurrent != null && bodyBatteryCurrent <= 25) {
+    caps.push({ label: 'Zware recente sessie + lage huidige Body Battery', max: 2 });
+  }
+  return caps;
+}
+
+function formatScoreDelta(delta) {
+  if (typeof delta !== 'number' || !Number.isFinite(delta)) return 'niet meegeteld';
+  if (Math.abs(delta) < 0.05) return '0.0';
+  return `${delta > 0 ? '+' : ''}${delta.toFixed(1)}`;
+}
+
+function ScoreBreakdownCard({ breakdown, bodyBatteryAtWake }) {
+  const confidenceColor = breakdown.confidence === 'high'
+    ? 'var(--good)'
+    : breakdown.confidence === 'low'
+      ? 'var(--warn)'
+      : 'oklch(78% 0.11 80)';
+  const finalLabel = breakdown.hasScoreInputs ? 'Eindscore' : 'Berekend';
+  const finalSub = breakdown.caps.length > 0
+    ? 'na caps'
+    : breakdown.finalScore !== breakdown.rounded
+      ? 'appscore'
+      : 'geen cap';
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{
+        padding: '22px 24px 18px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        gap: 18,
+        alignItems: 'start',
+        borderBottom: '1px solid var(--line)',
+      }}>
+        <div>
+          <div className="label" style={{ marginBottom: 8 }}>Scoreberekening</div>
+          <h2>Hoe je herstelscore ontstaat</h2>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <span className="mono" style={{
+            fontSize: 10,
+            letterSpacing: '.12em',
+            textTransform: 'uppercase',
+            padding: '7px 10px',
+            borderRadius: 999,
+            background: 'var(--bg-soft)',
+            color: 'var(--ink-3)',
+            whiteSpace: 'nowrap',
+          }}>
+            {breakdown.version}
+          </span>
+          <span className="mono" style={{
+            fontSize: 10,
+            letterSpacing: '.12em',
+            textTransform: 'uppercase',
+            padding: '7px 10px',
+            borderRadius: 999,
+            background: 'var(--bg-soft)',
+            color: confidenceColor,
+            whiteSpace: 'nowrap',
+          }}>
+            vertrouwen {breakdown.confidence}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ padding: 24 }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+          gap: 12,
+          marginBottom: 20,
+        }}>
+          <ScoreStep label="Start" value={breakdown.base.toFixed(1)} sub="neutraal punt" />
+          <ScoreStep label="Ruw" value={breakdown.rawScore.toFixed(2)} sub="na signalen" />
+          <ScoreStep label="Afgerond" value={`${breakdown.rounded}/6`} sub="voor caps" />
+          <ScoreStep label={finalLabel} value={`${breakdown.finalScore}/6`} sub={finalSub} accent />
+        </div>
+
+        <div style={{ display: 'grid', gap: 8 }}>
+          {breakdown.rows.map((row) => (
+            <ScoreBreakdownRow key={row.key} row={row} />
+          ))}
+        </div>
+
+        {breakdown.caps.length > 0 && (
+          <div style={{
+            marginTop: 18,
+            padding: 14,
+            borderRadius: 12,
+            background: 'oklch(96% 0.04 70)',
+            border: '1px solid oklch(88% 0.07 70)',
+          }}>
+            <div className="label" style={{ color: 'oklch(46% 0.07 70)', marginBottom: 8 }}>Caps toegepast</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {breakdown.caps.map((cap, index) => (
+                <span key={`${cap.label}-${index}`} className="mono" style={{
+                  fontSize: 11,
+                  color: 'var(--ink)',
+                  padding: '7px 9px',
+                  borderRadius: 999,
+                  background: '#fff',
+                  border: '1px solid oklch(86% 0.04 70)',
+                }}>
+                  {cap.label}: max {cap.max}/6
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {breakdown.staleSignals.length > 0 && (
+          <div style={{ marginTop: 14, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)' }}>
+            <b>Let op:</b> stale of ontbrekende signalen: {breakdown.staleSignals.join(', ')}.
+          </div>
+        )}
+
+        <div style={{ marginTop: 14, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)' }}>
+          Body Battery bij ontwaken{bodyBatteryAtWake != null ? ` (${bodyBatteryAtWake}%)` : ''} wordt alleen getoond als context.
+          De score gebruikt Body Battery huidig wanneer die recent genoeg is.
+        </div>
+        {!breakdown.hasScoreInputs && (
+          <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-4)' }}>
+            Deze demo/fallback-data bevat geen backend-scoremodel. Bij live Garmin-data gebruikt deze kaart de exacte score-inputs uit de API.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScoreStep({ label, value, sub, accent }) {
+  return (
+    <div style={{
+      borderRadius: 12,
+      background: accent ? 'var(--accent)' : 'var(--bg-soft)',
+      color: accent ? 'var(--accent-ink)' : 'var(--ink)',
+      padding: '14px 16px',
+      minWidth: 0,
+    }}>
+      <div className="label" style={{ color: accent ? 'var(--accent-ink)' : 'var(--ink-4)' }}>{label}</div>
+      <div className="mono" style={{ marginTop: 8, fontSize: 24, fontWeight: 600 }}>{value}</div>
+      <div className="mono" style={{
+        marginTop: 4,
+        fontSize: 10,
+        color: accent ? 'var(--accent-ink)' : 'var(--ink-4)',
+        letterSpacing: '.08em',
+      }}>{sub}</div>
+    </div>
+  );
+}
+
+function ScoreBreakdownRow({ row }) {
+  const isMissing = typeof row.delta !== 'number' || !Number.isFinite(row.delta);
+  const positive = !isMissing && row.delta > 0.05;
+  const negative = !isMissing && row.delta < -0.05;
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '1.15fr .9fr 1.2fr auto',
+      gap: 14,
+      alignItems: 'center',
+      padding: '12px 0',
+      borderBottom: '1px solid var(--line)',
+    }}>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>{row.label}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-4)', marginTop: 3, lineHeight: 1.35 }}>{row.note}</div>
+      </div>
+      <div className="mono" style={{ fontSize: 13, color: 'var(--ink-2)' }}>{row.value}</div>
+      <div className="mono" style={{ fontSize: 12, color: 'var(--ink-4)' }}>{row.formula}</div>
+      <div className="mono" style={{
+        fontSize: 13,
+        fontWeight: 700,
+        color: positive ? 'var(--good)' : negative ? 'var(--warn)' : 'var(--ink-4)',
+        whiteSpace: 'nowrap',
+      }}>
+        {formatScoreDelta(row.delta)}
+      </div>
+    </div>
+  );
+}
+
+function InputCard({ label, value, unit, sub, contribution, trend, impact }) {
   const arrow = trend === 'down' ? '↓' : trend === 'up' ? '↑' : trend === 'flat' ? '→' : null;
+  const hasImpact = typeof impact === 'number' && Number.isFinite(impact);
+  const inactive = impact == null && contribution == null;
+  const barWidth = hasImpact
+    ? Math.max(6, Math.min(100, Math.round(Math.abs(impact) * 42)))
+    : (contribution ?? 0);
+  const barColor = !hasImpact
+    ? 'var(--ink-3)'
+    : impact < -0.05
+      ? 'var(--warn)'
+      : impact > 0.05
+        ? 'var(--good)'
+        : 'var(--ink-3)';
+  const impactLabel = hasImpact ? formatScoreDelta(impact) : (inactive ? 'niet meegeteld' : `${contribution}%`);
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -174,14 +539,14 @@ function InputCard({ label, value, unit, sub, contribution, trend }) {
         <span className="stat-unit">{unit}</span>
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 6 }}>{sub}</div>
-      {/* Contribution bar */}
+      {/* Score impact bar */}
       <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ flex: 1, height: 4, background: 'var(--bg-soft)', borderRadius: 2 }}>
-          <div style={{ height: '100%', width: `${contribution}%`,
-                        background: 'var(--ink)', borderRadius: 2 }}></div>
+          <div style={{ height: '100%', width: `${barWidth}%`,
+                        background: barColor, borderRadius: 2 }}></div>
         </div>
         <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
-          letterSpacing: '.08em' }}>{contribution}%</span>
+          letterSpacing: '.08em', whiteSpace: 'nowrap' }}>{impactLabel}</span>
       </div>
     </div>
   );
