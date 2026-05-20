@@ -1651,12 +1651,14 @@ async def oauth_callback(
         # Store tokens in database
         garmin_token = oauth_service.store_tokens(db, user_id, token_data)
 
-        # Get user permissions
-        access_token = token_data['access_token']
-        permissions = oauth_service.get_user_permissions(access_token)
+        access_token = token_data["access_token"]
+        permissions = []
+        try:
+            permissions = oauth_service.get_user_permissions(access_token)
+        except Exception as perm_exc:
+            # Do not fail OAuth — tokens are stored; permissions sync on next /auth/status.
+            logger.warning(f"Permissions not ready immediately after OAuth (user {user_id}): {perm_exc}")
 
-        # Kick off a conservative initial import after connect. Evaluation keys are
-        # limited by days requested, so keep this small and prioritize activities.
         try:
             client = GarminAPIClient(db, user_id)
             backfill_result = request_initial_backfill(client, permissions)
@@ -1724,11 +1726,20 @@ async def check_auth_status(
                 "message": "No Garmin connection found"
             }
 
-        # Get user permissions
-        permissions = oauth_service.get_user_permissions(access_token)
+        permissions = []
+        permissions_pending = False
+        try:
+            permissions = oauth_service.get_user_permissions(access_token)
+        except Exception as perm_exc:
+            perm_text = str(perm_exc)
+            if "partner_registration_not_found" in perm_text or "no user partner found" in perm_text.lower():
+                permissions_pending = True
+                logger.warning(f"Garmin permissions pending for user {resolved_user_id}: {perm_exc}")
+            else:
+                raise
+
         garmin_access = build_garmin_capabilities(permissions)
 
-        # Get token info
         garmin_token = db.query(GarminToken).filter(
             GarminToken.user_id == resolved_user_id
         ).first()
@@ -1737,6 +1748,7 @@ async def check_auth_status(
         return {
             "authenticated": True,
             "garmin_user_id": garmin_token.garmin_user_id,
+            "permissions_pending": permissions_pending,
             "permissions": garmin_access["permissions"],
             "permission_response": permissions,
             "capabilities": garmin_access["capabilities"],
@@ -1786,18 +1798,17 @@ async def disconnect_garmin(
         access_token = oauth_service.get_valid_access_token(db, resolved_user_id)
 
         if access_token:
-            # Deregister from Garmin API
             try:
                 oauth_service.deregister_user(access_token)
             except Exception as e:
-                logger.warning(f"Garmin deregistration failed: {e}")
+                logger.warning(f"Garmin deregistration failed (local unlink continues): {e}")
 
-        # Delete local tokens
         oauth_service.delete_tokens(db, resolved_user_id)
 
         return {
             "status": "success",
-            "message": "Successfully disconnected from Garmin"
+            "message": "Successfully disconnected from Garmin",
+            "garmin_connected": False,
         }
 
     except Exception as e:

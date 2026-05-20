@@ -103,7 +103,7 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
       </div>
 
       {onLogout && (
-        <button className="btn ghost" onClick={onLogout} style={{ alignSelf: 'flex-start' }}>
+        <button className="btn ghost" onClick={() => onLogout()} style={{ alignSelf: 'flex-start' }}>
           Uitloggen
         </button>
       )}

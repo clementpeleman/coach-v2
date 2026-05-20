@@ -260,11 +260,35 @@ function App() {
     ? (recoverySnapshot?.source || trainingProfile?._source || 'empty')
     : 'demo';
 
-  const logout = () => {
-    if (session.userId && isLive) {
-      window.FC_API.disconnectGarmin(session.userId).catch(() => {});
+  const clearLocalCoachData = () => {
+    try {
+      const keys = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (!k) continue;
+        if (k.startsWith('fc_live_') || k.startsWith('fc_chat_messages')) keys.push(k);
+      }
+      keys.forEach((k) => window.localStorage.removeItem(k));
+      window.sessionStorage.removeItem('fc_pending_chat_messages');
+    } catch (_) {}
+  };
+
+  const logout = async () => {
+    const uid = session.userId;
+    if (uid && isLive) {
+      try {
+        await window.FC_API.disconnectGarmin(uid);
+      } catch (e) {
+        console.warn('Garmin disconnect:', e);
+      }
     }
+    clearLocalCoachData(uid);
     window.FC_SESSION.writeUserId(null);
+    window.history.replaceState({}, '', '/');
+    setProfile(null);
+    setRecoverySnapshot(null);
+    setTrainingProfile(null);
+    setDraftWorkout(null);
     setScreen('onboarding');
   };
 

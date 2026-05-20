@@ -200,29 +200,35 @@ class GarminOAuthService:
         data = response.json()
         return data['userId']
 
-    def get_user_permissions(self, access_token: str) -> list:
+    def get_user_permissions(self, access_token: str, *, retries: int = 4) -> list:
         """
         Fetch user's granted permissions.
 
-        Args:
-            access_token: Valid OAuth2 access token
-
-        Returns:
-            List of permission strings
-
-        Raises:
-            Exception: If API call fails
+        After connect or re-connect Garmin may return partner_registration_not_found
+        for a few seconds until the user-consumer link is active — retry briefly.
         """
-        headers = {
-            "Authorization": f"Bearer {access_token}"
-        }
+        import time
 
-        response = requests.get(self.PERMISSIONS_URL, headers=headers)
+        headers = {"Authorization": f"Bearer {access_token}"}
+        last_error = None
 
-        if response.status_code != 200:
-            raise Exception(f"Failed to fetch permissions: {response.text}")
+        for attempt in range(max(1, retries)):
+            response = requests.get(self.PERMISSIONS_URL, headers=headers, timeout=30)
+            if response.status_code == 200:
+                return response.json()
 
-        return response.json()
+            body = response.text or ""
+            last_error = f"Failed to fetch permissions: {body}"
+            transient = (
+                "partner_registration_not_found" in body
+                or "no user partner found" in body.lower()
+            )
+            if transient and attempt < retries - 1:
+                time.sleep(1.0 + attempt * 1.5)
+                continue
+            break
+
+        raise Exception(last_error or "Failed to fetch permissions")
 
     def deregister_user(self, access_token: str):
         """
@@ -389,13 +395,14 @@ class GarminOAuthService:
 
     def delete_tokens(self, db: Session, user_id: int):
         """
-        Delete stored tokens for a user.
+        Delete stored tokens for a user and clear Garmin link on profile.
 
         Args:
             db: Database session
             user_id: Internal user ID
         """
-        db.query(GarminToken).filter(
-            GarminToken.user_id == user_id
-        ).delete()
+        profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if profile:
+            profile.garmin_user_id = None
+        db.query(GarminToken).filter(GarminToken.user_id == user_id).delete()
         db.commit()

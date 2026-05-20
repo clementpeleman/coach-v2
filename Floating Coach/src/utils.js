@@ -60,6 +60,9 @@ window.FC_UTILS = {
   formatApiError: (message) => {
     if (!message) return 'Er ging iets mis. Probeer opnieuw.';
     const m = String(message);
+    if (m.includes('partner_registration_not_found') || m.includes('no user partner found')) {
+      return 'Garmin is nog bezig met koppelen. Wacht even en vernieuw, of probeer opnieuw te verbinden.';
+    }
     if (m.includes('GARMIN_REDIRECT_URI') || m.includes('GARMIN_CONSUMER')) {
       return 'Garmin is nog niet geconfigureerd op de server.';
     }
