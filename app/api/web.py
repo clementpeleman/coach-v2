@@ -209,8 +209,8 @@ async def start_direct_garmin_oauth(
 
         oauth_service = GarminOAuthService()
 
-        ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-        db.query(OAuthSession).filter(OAuthSession.created_at < ten_minutes_ago).delete()
+        thirty_minutes_ago = datetime.utcnow() - timedelta(minutes=30)
+        db.query(OAuthSession).filter(OAuthSession.created_at < thirty_minutes_ago).delete()
         db.commit()
 
         auth_url, code_verifier, state = oauth_service.get_authorization_url(
@@ -223,6 +223,7 @@ async def start_direct_garmin_oauth(
         )
         db.add(oauth_session)
         db.commit()
+        db.refresh(oauth_session)
 
         return GarminDirectStartResponse(
             user_id=user.user_id,

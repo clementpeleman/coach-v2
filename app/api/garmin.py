@@ -1562,9 +1562,8 @@ async def start_oauth(
         if not redirect_uri:
             raise HTTPException(status_code=500, detail="GARMIN_REDIRECT_URI not configured")
 
-        # Clean up old sessions (e.g., older than 10 minutes)
-        ten_minutes_ago = datetime.utcnow() - timedelta(minutes=10)
-        deleted_count = db.query(OAuthSession).filter(OAuthSession.created_at < ten_minutes_ago).delete()
+        thirty_minutes_ago = datetime.utcnow() - timedelta(minutes=30)
+        deleted_count = db.query(OAuthSession).filter(OAuthSession.created_at < thirty_minutes_ago).delete()
         if deleted_count > 0:
             logger.info(f"Cleaned up {deleted_count} old OAuth sessions.")
         db.commit()
@@ -1627,13 +1626,19 @@ async def oauth_callback(
 
 
         if not session:
-            raise HTTPException(status_code=400, detail="Invalid state parameter or session expired")
+            from fastapi.responses import HTMLResponse
+            retry_url = settings.webapp_url.rstrip("/")
+            return HTMLResponse(
+                content=f"""<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px">
+                <h1>Koppeling verlopen</h1>
+                <p>De Garmin-sessie is niet meer geldig (verlopen tab of opnieuw gestart).</p>
+                <p><a href="{retry_url}">Terug naar Floating Coach</a> en klik opnieuw op <b>Verbind Garmin</b>.</p>
+                </body></html>""",
+                status_code=400,
+            )
 
-        # Retrieve data and delete session
         code_verifier = session.code_verifier
         user_id = session.user_id
-        db.delete(session)
-        db.commit()
 
         # Get redirect_uri from settings
         redirect_uri = settings.garmin_redirect_uri
@@ -1648,8 +1653,9 @@ async def oauth_callback(
             redirect_uri=redirect_uri
         )
 
-        # Store tokens in database
-        garmin_token = oauth_service.store_tokens(db, user_id, token_data)
+        oauth_service.store_tokens(db, user_id, token_data)
+        db.delete(session)
+        db.commit()
 
         access_token = token_data["access_token"]
         permissions = []
@@ -2121,9 +2127,16 @@ async def training_recommendation(
 ):
     """Return the canonical backend-owned workout recommendation for the app."""
     try:
+        from app.core.recovery_snapshot import build_live_recovery_snapshot
+
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         training = _training_context(db, resolved_user_id, days, current_days)
-        recovery = await get_recovery_snapshot(user_id=resolved_user_id, db=db)
+        recovery = build_live_recovery_snapshot(
+            db,
+            resolved_user_id,
+            lookback_days=14,
+            readiness_version=settings.readiness_version,
+        )
         weather = {
             "temperature_c": temperature_c,
             "wind_speed_kmh": wind_speed_kmh,
@@ -2329,14 +2342,15 @@ async def get_recovery_snapshot(
 ):
     """Return the latest Garmin health metrics needed by the app recovery UI."""
     try:
-        from app.config import settings
         from app.core.recovery_snapshot import build_live_recovery_snapshot
 
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        # lookback_days is resolved by FastAPI only on HTTP requests — never call this
+        # handler from other endpoints; use build_live_recovery_snapshot() instead.
         return build_live_recovery_snapshot(
             db,
             resolved_user_id,
-            lookback_days=lookback_days,
+            lookback_days=int(lookback_days),
             readiness_version=settings.readiness_version,
         )
     except Exception as e:

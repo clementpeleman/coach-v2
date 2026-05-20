@@ -282,7 +282,7 @@ function App() {
         console.warn('Garmin disconnect:', e);
       }
     }
-    clearLocalCoachData(uid);
+    clearLocalCoachData();
     window.FC_SESSION.writeUserId(null);
     window.history.replaceState({}, '', '/');
     setProfile(null);
