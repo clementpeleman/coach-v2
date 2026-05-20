@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Floating Coach</title>
-<meta name="viewport" content="width=1320">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -24,7 +24,7 @@
     --dark-2:      #1a1b17;
     --dark-3:      #25261f;
 
-    --accent:      oklch(85% 0.19 125);     /* default acid lime */
+    --accent:      #caff3b;                 /* acid lime */
     --accent-ink:  #0d0e0b;
     --accent-soft: color-mix(in oklab, var(--accent) 22%, transparent);
 
@@ -378,6 +378,59 @@
       var(--bg);
     padding: 60px 40px;
   }
+
+  /* Mobile — bottom tab bar */
+  @media (max-width: 767px) {
+    .app {
+      grid-template-columns: 1fr;
+      min-height: 100dvh;
+      padding-bottom: 72px;
+    }
+    .rail {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      top: auto;
+      height: auto;
+      min-height: 0;
+      flex-direction: row;
+      align-items: stretch;
+      justify-content: space-around;
+      border-right: none;
+      border-top: 1px solid var(--line);
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+      z-index: 55;
+      gap: 2px;
+      background: var(--surface);
+    }
+    .rail-brand,
+    .rail-status,
+    .rail-extra,
+    .rail-footer,
+    .rail .spacer {
+      display: none !important;
+    }
+    .rail-item.tab-nav {
+      flex: 1;
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
+      padding: 8px 4px;
+      font-size: 11px;
+      text-align: center;
+    }
+    .rail-item.tab-nav .ico { font-size: 16px; }
+    .main {
+      padding: 20px 16px 100px;
+      max-width: none;
+    }
+    .screen-head h1 { font-size: 32px; }
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    .orb-wrap { right: 16px; bottom: 72px; }
+    .coach-panel { width: min(100vw - 24px, 380px); }
+    .splash { padding: 32px 20px; }
+  }
 </style>
 
 <script type="application/json" id="speaker-notes">[]</script>
@@ -403,6 +456,7 @@
 <script type="text/babel" src="src/screens/activities.jsx"></script>
 <script type="text/babel" src="src/screens/workout.jsx"></script>
 <script type="text/babel" src="src/screens/recovery.jsx"></script>
+<script type="text/babel" src="src/screens/profile.jsx"></script>
 <script type="text/babel" src="src/app.jsx"></script>
 
 </body>

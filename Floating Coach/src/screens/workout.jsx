@@ -273,7 +273,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
     window.dispatchEvent?.(new CustomEvent('fc-open-chat-messages', { detail: pendingMessages }));
     setChatThinking?.(false);
     setChatMessages?.((messages) => appendUniqueMessages(messages || window.FC_DATA.chatSeed, pendingMessages));
-    onNavigate?.('chat');
+    window.dispatchEvent?.(new CustomEvent('fc-open-coach-orb'));
   };
 
   return (

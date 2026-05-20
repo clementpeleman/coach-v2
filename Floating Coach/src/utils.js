@@ -57,4 +57,19 @@ window.FC_UTILS = {
     if (s === 5) return 'Intervallen mogen vandaag.';
     return 'Sprints of wedstrijdsessie kan.';
   },
+  formatApiError: (message) => {
+    if (!message) return 'Er ging iets mis. Probeer opnieuw.';
+    const m = String(message);
+    if (m.includes('GARMIN_REDIRECT_URI') || m.includes('GARMIN_CONSUMER')) {
+      return 'Garmin is nog niet geconfigureerd op de server.';
+    }
+    if (m.includes('OPENAI_API_KEY')) return 'De coach-chat is tijdelijk niet beschikbaar.';
+    if (m.includes('Internal Server Error') || m.includes('not configured')) {
+      return 'Serverfout. Probeer het later opnieuw.';
+    }
+    if (m.includes('405') || m.includes('Not Allowed')) {
+      return 'Verbinding met de server mislukt. Vernieuw de pagina.';
+    }
+    return m.replace(/^API\s+\S+\s+failed\s*\(\d+\):\s*/i, '').trim() || m;
+  },
 };

@@ -109,7 +109,7 @@ function ChatScreen({
           time: FCU.fmtTime(new Date().toISOString()), source: 'live',
         }]);
       } catch (e) {
-        setLastError(e.message);
+        setLastError(FCU.formatApiError(e.message));
         // Fall back to mock reply so the conversation stays usable
         setMessages((m) => [...m, {
           role: 'assistant',

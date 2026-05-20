@@ -1,7 +1,7 @@
 // App shell — sidebar nav, screen router, floating orb.
 const { useState: useStateApp, useEffect: useEffectApp } = React;
 
-const ACCENT_OKLCH = 'oklch(92% 0.20 125)'; // acid lime
+const ACCENT_HEX   = '#caff3b';
 const ACCENT_INK   = '#0d0e0b';
 const DEFAULT_RECOVERY = 4;
 
@@ -149,13 +149,11 @@ function App() {
       const incoming = Array.isArray(messagesOrEvent)
         ? messagesOrEvent
         : messagesOrEvent?.detail;
-      if (!Array.isArray(incoming) || !incoming.length) {
-        setScreen('chat');
-        return;
+      if (Array.isArray(incoming) && incoming.length) {
+        setChatThinking(false);
+        setChatMessages((current) => appendUniqueChatMessages(current || window.FC_DATA.chatSeed, incoming));
       }
-      setChatThinking(false);
-      setChatMessages((current) => appendUniqueChatMessages(current || window.FC_DATA.chatSeed, incoming));
-      setScreen('chat');
+      window.dispatchEvent(new CustomEvent('fc-open-coach-orb'));
     };
     window.FC_OPEN_COACH_MESSAGES = openCoachWithMessages;
     window.addEventListener('fc-open-chat-messages', openCoachWithMessages);
@@ -219,7 +217,7 @@ function App() {
 
   // Apply accent token once.
   useEffectApp(() => {
-    document.documentElement.style.setProperty('--accent', ACCENT_OKLCH);
+    document.documentElement.style.setProperty('--accent', ACCENT_HEX);
     document.documentElement.style.setProperty('--accent-ink', ACCENT_INK);
   }, []);
 
@@ -239,11 +237,10 @@ function App() {
   }, [session.userId]);
 
   const SCREENS = {
-    dashboard:  { label: 'Dashboard',    ico: '◆', Comp: window.Dashboard },
+    dashboard:  { label: 'Vandaag',      ico: '◆', Comp: window.Dashboard },
     workout:    { label: 'Training',     ico: '▶', Comp: window.WorkoutScreen },
     activities: { label: 'Activiteiten', ico: '≡', Comp: window.ActivitiesScreen },
-    recovery:   { label: 'Herstel',      ico: '◐', Comp: window.RecoveryScreen },
-    chat:       { label: 'Coach',        ico: '◯', Comp: window.ChatScreen },
+    profiel:    { label: 'Profiel',      ico: '◎', Comp: window.ProfileScreen },
   };
 
   if (screen === 'onboarding') {
@@ -253,26 +250,6 @@ function App() {
         apiStatus={apiStatus.status} />
     );
   }
-
-  const Active = SCREENS[screen]?.Comp;
-  const screenProps = {
-    recoveryScore,
-    recoveryData: recoveryMetrics,
-    recoverySnapshot,
-    weather,
-    onNavigate: setScreen,
-    apiStatus: apiStatus.status,
-    userId: session.userId,
-    profile,
-    trainingProfile,
-    chatMessages,
-    setChatMessages,
-    chatThinking,
-    setChatThinking,
-    resetChat,
-    draftWorkout,
-    setDraftWorkout,
-  };
 
   const userName = profile?.display_name || profile?.email || window.FC_DATA.user.name;
   const userInitials = (profile?.display_name || profile?.email || 'CP')
@@ -291,12 +268,34 @@ function App() {
     setScreen('onboarding');
   };
 
+  const activeKey = SCREENS[screen] ? screen : 'dashboard';
+  const Active = SCREENS[activeKey]?.Comp;
+  const screenProps = {
+    recoveryScore,
+    recoveryData: recoveryMetrics,
+    recoverySnapshot,
+    weather,
+    onNavigate: setScreen,
+    apiStatus: apiStatus.status,
+    userId: session.userId,
+    profile,
+    trainingProfile,
+    chatMessages,
+    setChatMessages,
+    chatThinking,
+    setChatThinking,
+    resetChat,
+    draftWorkout,
+    setDraftWorkout,
+    onLogout: logout,
+  };
+
   return (
     <>
       <div className="app">
         {/* Sidebar */}
         <aside className="rail">
-          <div className="brand">
+          <div className="brand rail-brand">
             <div className="dot"></div>
             <div>
               <b>Floating Coach</b>
@@ -306,59 +305,30 @@ function App() {
 
           {Object.entries(SCREENS).map(([k, s]) => (
             <div key={k}
-              className={`rail-item ${screen === k ? 'active' : ''}`}
+              className={`rail-item tab-nav ${screen === k ? 'active' : ''}`}
               onClick={() => setScreen(k)}>
               <span className="ico">{s.ico}</span>
               <span>{s.label}</span>
-              {k === 'workout' && screen !== 'workout' && (
-                <span style={{ marginLeft: 'auto' }} className="tag accent">NEW</span>
-              )}
             </div>
           ))}
 
           <div className="spacer"></div>
 
-          {/* Live status block */}
-          <div style={{ padding: '10px 12px', marginBottom: 10,
+          <div className="rail-status" style={{ padding: '10px 12px', marginBottom: 10,
                         background: 'var(--surface)', border: '1px solid var(--line)',
                         borderRadius: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span className="label">Backend</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span className="label">Garmin</span>
               <window.ConnectionPill status={apiStatus.status} source={appDataSource}
-                                      onClick={apiStatus.probe} />
+                onClick={() => setScreen('profiel')} />
             </div>
-            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', marginTop: 6,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={apiStatus.baseUrl}>
-              {apiStatus.baseUrl.replace(/^https?:\/\//, '')}
+            <div style={{ fontSize: 13, fontWeight: 600, marginTop: 8,
+              color: garminConnected ? 'var(--good)' : 'var(--warn)' }}>
+              {garminConnected ? 'Verbonden' : 'Niet verbonden'}
             </div>
-            {session.userId ? (
-              <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 6 }}>
-                user_id <b style={{ color: 'var(--ink)' }}>{session.userId}</b>
-                {garminConnected
-                  ? <span style={{ color: 'var(--good)', marginLeft: 6 }}>● garmin</span>
-                  : <span style={{ color: 'var(--warn)', marginLeft: 6 }}>○ niet verb.</span>}
-              </div>
-            ) : (
-              <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', marginTop: 6 }}>
-                niet ingelogd
-              </div>
-            )}
           </div>
 
-          <div className="rail-item" onClick={() => setScreen('onboarding')}>
-            <span className="ico">↻</span>
-            <span>{session.userId ? 'Opnieuw verbinden' : 'Login / verbind'}</span>
-          </div>
-
-          {session.userId && (
-            <div className="rail-item" onClick={logout}>
-              <span className="ico">⎋</span>
-              <span>Logout</span>
-            </div>
-          )}
-
-          <div className="footer">
+          <div className="footer rail-footer">
             <div className="avatar">{userInitials}</div>
             <div style={{ flex: 1 }}>
               <div className="who">{userName}</div>
@@ -379,12 +349,10 @@ function App() {
         </main>
       </div>
 
-      {/* Floating coach */}
-      {screen !== 'chat' && (
-        <window.CoachOrb recoveryScore={recoveryScore}
+      {/* Floating coach — enige coach-ingang */}
+      <window.CoachOrb recoveryScore={recoveryScore}
                           recoveryData={recoveryMetrics}
                           weather={weather}
-                          onNavigateChat={() => setScreen('chat')}
                           currentScreen={screen}
                           apiStatus={apiStatus.status}
                           userId={session.userId}
@@ -395,7 +363,6 @@ function App() {
                           setMessages={setChatMessages}
                           thinking={chatThinking}
                           setThinking={setChatThinking} />
-      )}
     </>
   );
 }

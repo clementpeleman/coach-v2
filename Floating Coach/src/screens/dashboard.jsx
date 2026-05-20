@@ -61,8 +61,27 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
     return () => clearInterval(t);
   }, []);
 
+  const showDemoBanner = source === 'demo' || !userId;
+
   return (
-    <div className="col" style={{ gap: 24 }} data-screen-label="Dashboard">
+    <div className="col" style={{ gap: 24 }} data-screen-label="Vandaag">
+      {showDemoBanner && (
+        <div className="card" style={{
+          background: 'color-mix(in oklab, var(--accent) 18%, var(--surface))',
+          borderColor: 'color-mix(in oklab, var(--accent) 40%, var(--line))',
+          padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <span className="tag accent">Demo</span>
+          <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)' }}>
+            <b>Demo-data</b> — verbind Garmin voor live inzichten.
+          </div>
+          <button className="btn accent" style={{ padding: '8px 14px', fontSize: 12 }}
+            onClick={() => onNavigate('profiel')}>
+            Verbind Garmin
+          </button>
+        </div>
+      )}
+
       {/* Head */}
       <div className="screen-head">
         <div>
@@ -206,10 +225,10 @@ function HeroWorkout({ rec, draftWorkout, score, weather, onNavigate }) {
             <div style={{ color: 'oklch(78% 0.01 100)', fontSize: 13, lineHeight: 1.5 }}>
               {FC.recoveryAdvice(score)}
             </div>
-            <button className="btn ghost" onClick={() => onNavigate('recovery')}
+            <button className="btn ghost" onClick={() => onNavigate('profiel')}
                     style={{ marginTop: 10, color: 'var(--accent)', borderColor: 'transparent',
                               padding: '6px 0' }}>
-              Volledig herstelrapport <span className="mono">→</span>
+              Herstel in profiel <span className="mono">→</span>
             </button>
           </div>
         </div>
@@ -419,7 +438,7 @@ function CoachInsight({ onNavigate, analysis, allowDemo }) {
       <p style={{ fontSize: 14, lineHeight: 1.5, margin: 0, color: 'var(--ink-2)' }}>
         {a.insight || 'Zodra Garmin-data geladen is, geef ik hier een concreet advies.'}
       </p>
-      <button className="btn" onClick={() => onNavigate('chat')}
+      <button className="btn" onClick={() => window.dispatchEvent(new CustomEvent('fc-open-coach-orb'))}
               style={{ marginTop: 18, width: '100%', justifyContent: 'center' }}>
         Bespreek met coach <span className="arrow">→</span>
       </button>

@@ -3,14 +3,22 @@ const { useState, useEffect, useRef } = React;
 const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
 function CoachOrb({
-  recoveryScore, recoveryData, weather, onNavigateChat, currentScreen, apiStatus, userId,
+  recoveryScore, recoveryData, weather, apiStatus, userId,
   trainingProfile, draftWorkout, setDraftWorkout, messages, setMessages, thinking, setThinking,
 }) {
+  const { formatApiError } = window.FC_UTILS;
   const online = apiStatus === 'online';
   const R = recoveryData || window.FC_DATA.recovery;
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
+  const [chatError, setChatError] = useState(null);
   const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const openPanel = () => setOpen(true);
+    window.addEventListener('fc-open-coach-orb', openPanel);
+    return () => window.removeEventListener('fc-open-coach-orb', openPanel);
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -25,6 +33,7 @@ function CoachOrb({
     setMessages(history);
     setDraft('');
     setThinking(true);
+    setChatError(null);
 
     if (online && userId) {
       try {
@@ -61,6 +70,7 @@ function CoachOrb({
         if (res.draft_workout) setDraftWorkout?.(() => res.draft_workout);
         setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);
       } catch (e) {
+        setChatError(formatApiError(e.message));
         setMessages((m) => [...m, { role: 'assistant',
           content: `<i>Demo (backend offline):</i><br/>${mockReply(text, recoveryScore, R)}`,
           time: fmtTime(new Date().toISOString()) }]);
@@ -119,6 +129,9 @@ function CoachOrb({
             {messages.map((m, i) => (
               <ChatBubble key={i} m={m} />
             ))}
+            {chatError && (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--bad)' }}>{chatError}</p>
+            )}
             {thinking && (
               <div style={{ display: 'flex', gap: 6, paddingLeft: 4 }}>
                 <Dot delay={0} /><Dot delay={.2} /><Dot delay={.4} />
@@ -157,10 +170,7 @@ function CoachOrb({
         </div>
       )}
 
-      <div className="orb" onClick={() => {
-        if (currentScreen === 'chat') return;
-        setOpen((v) => !v);
-      }}>
+      <div className="orb" onClick={() => setOpen((v) => !v)}>
         <div className="face">
           <div className="mouth"></div>
           <div className="halo"></div>

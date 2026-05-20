@@ -2,7 +2,7 @@
 const { useEffect: useEffectR } = React;
 const FCUR = window.FC_UTILS;
 
-function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavigate }) {
+function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, embedded }) {
   const D = window.FC_DATA;
   const R = recoveryData || D.recovery;
   const activeDate = recoverySnapshot?.calendar_date
@@ -17,8 +17,13 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
   const hasRecentTraining = R.recentTrainingLoad != null || Boolean(R.hardestRecentActivity);
   const scoreBreakdown = buildRecoveryScoreBreakdown(recoveryScore, R, recoverySnapshot);
 
+  const sourceLabel = recoverySnapshot?.source === 'live'
+    ? 'Van Garmin'
+    : (recoverySnapshot?.source === 'stale-live' ? 'Garmin (cache)' : 'Geschat (demo)');
+
   return (
-    <div data-screen-label="Recovery assessment" className="col" style={{ gap: 24 }}>
+    <div data-screen-label="Recovery assessment" className="col" style={{ gap: embedded ? 16 : 24 }}>
+      {!embedded && (
       <div className="screen-head">
         <div>
           <div className="label" style={{ marginBottom: 10 }}>
@@ -29,10 +34,16 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
         <div className="meta">
           <div>Op basis van slaap, HRV, stress & recente training</div>
           <div className="mono" style={{ marginTop: 4, color: 'var(--ink)' }}>
-            <b>0—6 schaal</b>
+            <b>0—6 schaal</b> · {sourceLabel}
           </div>
         </div>
       </div>
+      )}
+      {embedded && (
+        <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.14em' }}>
+          Bron: {sourceLabel}
+        </div>
+      )}
 
       {/* Hero ring + advice */}
       <div className="card dark" style={{ padding: '32px 36px', position: 'relative', overflow: 'hidden' }}>
@@ -107,7 +118,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
               <button className="btn accent lg" onClick={() => onNavigate('workout')}>
                 Bekijk aanbevolen training <span className="arrow">→</span>
               </button>
-              <button className="btn ghost" onClick={() => onNavigate('chat')}
+              <button className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent('fc-open-coach-orb'))}
                 style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)' }}>
                 Vraag de coach
               </button>

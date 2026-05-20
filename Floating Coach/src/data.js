@@ -90,10 +90,10 @@ window.FC_DATA = (() => {
 
   // Floating coach quick suggestions
   const coachSuggestions = [
-    'Hoe was mijn slaap vannacht?',
-    'Maak een duurloop van 75 min',
+    'Hoe was mijn laatste training?',
+    'Wat train ik morgen?',
     'Wat is mijn herstelstatus?',
-    'Toon mijn activiteiten van deze week',
+    'Pas mijn training van vandaag aan',
   ];
 
   return {
