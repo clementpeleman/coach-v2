@@ -267,15 +267,30 @@ function buildRecoveryScoreBreakdown(recoveryScore, metrics = {}, snapshot = {})
   }
 
   const hrv = numberOrNull(inputs.hrvOvernight ?? metrics.hrvOvernight);
+  const hrvBaseline = numberOrNull(inputs.hrvBaselineMs ?? metrics.hrvBaselineMs);
+  const hrvDevPct = numberOrNull(inputs.hrvDeviationPct ?? metrics.hrvDeviationPct);
   if (hrv != null) {
-    addRow(
-      'hrv',
-      'HRV overnacht',
-      `${Math.round(hrv)} ms`,
-      `(${Math.round(hrv)} - 45) / 35`,
-      (hrv - 45) / 35,
-      'Zonder persoonlijke baseline is dit bewust een kleinere stabiliserende factor.',
-    );
+    if (hrvBaseline != null) {
+      const denom = Math.max(hrvBaseline * 0.15, 8);
+      const delta = Math.max(-1, Math.min(1, ((hrv - hrvBaseline) / denom) * 0.4));
+      addRow(
+        'hrv',
+        'HRV overnacht',
+        `${Math.round(hrv)} ms (baseline ${Math.round(hrvBaseline)} ms${hrvDevPct != null ? `, ${hrvDevPct > 0 ? '+' : ''}${hrvDevPct}%` : ''})`,
+        `clamp(((${hrv} - ${Math.round(hrvBaseline)}) / ${denom.toFixed(1)}) * 0.4)`,
+        delta,
+        'v4: afwijking t.o.v. je 14-nachten mediaan.',
+      );
+    } else {
+      addRow(
+        'hrv',
+        'HRV overnacht',
+        `${Math.round(hrv)} ms`,
+        `(${Math.round(hrv)} - 45) / 35`,
+        (hrv - 45) / 35,
+        'Te weinig HRV-historie: lichte fallback t.o.v. 45 ms.',
+      );
+    }
   } else {
     addRow('hrv', 'HRV overnacht', 'ontbreekt', 'niet meegeteld', null, 'Geen HRV-samenvatting beschikbaar.');
   }
