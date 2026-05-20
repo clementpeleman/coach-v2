@@ -1,4 +1,4 @@
-// Profiel — Garmin, account, herstel.
+// Profiel — Garmin, account, herstel, data-import.
 const { useState: useStateP, useEffect: useEffectP } = React;
 const FCU = window.FC_UTILS;
 
@@ -10,12 +10,26 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
   const [saveMsg, setSaveMsg] = useStateP(null);
   const [connecting, setConnecting] = useStateP(false);
   const [connectError, setConnectError] = useStateP(null);
+  const [importStatus, setImportStatus] = useStateP(null);
+  const [syncing, setSyncing] = useStateP(false);
+  const [syncMsg, setSyncMsg] = useStateP(null);
   const garminConnected = profile?.garmin_connected ?? false;
+
+  const loadImportStatus = () => {
+    if (!userId || !online) return;
+    window.FC_API.fetchGarminImportStatus(userId, 30)
+      .then((s) => setImportStatus(s))
+      .catch(() => setImportStatus(null));
+  };
 
   useEffectP(() => {
     if (profile?.email) setEmail(profile.email);
     if (profile?.display_name) setName(profile.display_name);
   }, [profile]);
+
+  useEffectP(() => {
+    loadImportStatus();
+  }, [userId, online, garminConnected]);
 
   const saveProfile = async () => {
     if (!email.includes('@') || !userId || !online) return;
@@ -48,6 +62,27 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
     }
   };
 
+  const startDataImport = async () => {
+    if (!userId || !online) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await window.FC_API.requestInitialGarminSync(userId);
+      setSyncMsg(res.message || 'Import gestart. Even geduld…');
+      try { window.localStorage.setItem(`fc_initial_sync_${userId}`, 'done'); } catch (_) {}
+      setTimeout(loadImportStatus, 3000);
+    } catch (e) {
+      setSyncMsg(FCU.formatApiError(e.message));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const summary = importStatus?.summary || {};
+  const activityCount = summary.activity_records ?? 0;
+  const healthCount = summary.health_records ?? 0;
+  const hasData = activityCount > 0 || healthCount > 0;
+
   return (
     <div className="col" style={{ gap: 24 }} data-screen-label="Profiel">
       <div className="screen-head">
@@ -70,6 +105,35 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
         </button>
         {connectError && <p style={{ marginTop: 12, fontSize: 13, color: 'var(--bad)' }}>{connectError}</p>}
       </div>
+
+      {garminConnected && userId && online && (
+        <div className="card" style={{ padding: '24px 28px' }}>
+          <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Data-import</h2>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>
+            {hasData
+              ? `${activityCount} activiteiten en ${healthCount} gezondheidsrecords in de laatste 30 dagen.`
+              : 'Nog geen data in de database. Start een import — Garmin stuurt records via webhooks (enkele minuten).'}
+          </p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn accent" onClick={startDataImport} disabled={syncing}>
+              {syncing ? 'Import starten…' : (hasData ? 'Opnieuw importeren' : 'Start data-import')}
+            </button>
+            <button className="btn ghost" onClick={loadImportStatus} disabled={syncing}>
+              Status vernieuwen
+            </button>
+          </div>
+          {syncMsg && (
+            <p style={{ marginTop: 12, fontSize: 13, color: 'var(--ink-2)' }}>{syncMsg}</p>
+          )}
+          {!hasData && (
+            <p style={{ marginTop: 12, fontSize: 12, color: 'var(--ink-4)', lineHeight: 1.45 }}>
+              Geen data na 15 min? Controleer in Garmin Developer dat webhooks naar{' '}
+              <span className="mono">/garmin/webhook/activity</span> en{' '}
+              <span className="mono">/garmin/webhook/health</span> wijzen (zelfde domein als de app).
+            </p>
+          )}
+        </div>
+      )}
 
       {userId && online && (
         <div className="card" style={{ padding: '24px 28px' }}>

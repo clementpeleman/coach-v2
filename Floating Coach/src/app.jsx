@@ -225,7 +225,7 @@ function App() {
   useEffectApp(() => {
     const params = new URLSearchParams(window.location.search);
     const hadUser = params.has('user_id');
-    const hadGarmin = params.has('garmin_connected');
+    const hadGarmin = params.get('garmin_connected') === '1';
     if (hadUser) params.delete('user_id');
     if (hadGarmin) params.delete('garmin_connected');
     const onDashboardPath = window.location.pathname.replace(/\/$/, '') === '/dashboard';
@@ -234,7 +234,18 @@ function App() {
       const q = params.toString();
       window.history.replaceState({}, '', '/' + (q ? `?${q}` : ''));
     }
-  }, [session.userId]);
+    if (hadGarmin && session.userId && apiStatus.status === 'online') {
+      const syncKey = `fc_initial_sync_${session.userId}`;
+      try {
+        if (window.localStorage.getItem(syncKey) !== 'done') {
+          window.localStorage.setItem(syncKey, 'pending');
+          window.FC_API.requestInitialGarminSync(session.userId)
+            .then(() => window.localStorage.setItem(syncKey, 'done'))
+            .catch(() => window.localStorage.removeItem(syncKey));
+        }
+      } catch (_) {}
+    }
+  }, [session.userId, apiStatus.status]);
 
   const SCREENS = {
     dashboard:  { label: 'Vandaag',      ico: '◆', Comp: window.Dashboard },
@@ -283,6 +294,7 @@ function App() {
       }
     }
     clearLocalCoachData();
+    try { if (uid) window.localStorage.removeItem(`fc_initial_sync_${uid}`); } catch (_) {}
     window.FC_SESSION.writeUserId(null);
     window.history.replaceState({}, '', '/');
     setProfile(null);

@@ -58,8 +58,9 @@ DEFAULT_HEALTH_BACKFILL_TYPES = [
 ]
 CORE_HEALTH_BACKFILL_TYPES = ["dailies", "sleeps", "stressDetails", "hrv"]
 REQUIRED_EXPORT_PERMISSIONS = {"ACTIVITY_EXPORT", "HISTORICAL_DATA_EXPORT"}
+POST_OAUTH_EXPORT_PERMISSIONS = {"ACTIVITY_EXPORT", "HISTORICAL_DATA_EXPORT", "HEALTH_EXPORT"}
 INITIAL_ACTIVITY_BACKFILL_DAYS = 30
-INITIAL_HEALTH_BACKFILL_DAYS = 7
+INITIAL_HEALTH_BACKFILL_DAYS = 30
 
 
 class RecommendationAdjustRequest(BaseModel):
@@ -90,6 +91,93 @@ def extract_permission_names(permissions_response) -> set[str]:
     else:
         permissions = permissions_response or []
     return {str(permission) for permission in permissions}
+
+
+def fetch_permissions_with_retry(
+    oauth_service: GarminOAuthService,
+    *,
+    access_token: Optional[str] = None,
+    db: Optional[Session] = None,
+    user_id: Optional[int] = None,
+    max_attempts: int = 10,
+) -> list[str]:
+    """Garmin permissions can lag seconds after OAuth — retry before deciding to skip backfill."""
+    if not access_token:
+        if db is None or user_id is None:
+            return []
+        access_token = oauth_service.get_valid_access_token(db, user_id)
+    if not access_token:
+        return []
+
+    for attempt in range(max_attempts):
+        try:
+            raw = oauth_service.get_user_permissions(access_token, retries=3)
+            names = sorted(extract_permission_names(raw))
+            if names:
+                return names
+        except Exception as exc:
+            logger.warning(f"Permissions fetch attempt {attempt + 1}/{max_attempts}: {exc}")
+        time.sleep(1.0 + attempt * 0.8)
+    return []
+
+
+def trigger_initial_import(
+    db: Session,
+    user_id: int,
+    *,
+    access_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Request Garmin historical backfill after connect.
+    Data arrives asynchronously via webhooks — must be configured in Garmin Developer Portal.
+    """
+    oauth_service = GarminOAuthService()
+    if not access_token:
+        access_token = oauth_service.get_valid_access_token(db, user_id)
+    if not access_token:
+        return {
+            "status": "error",
+            "message": "Geen geldige Garmin-token. Verbind Garmin opnieuw.",
+        }
+
+    perm_names = fetch_permissions_with_retry(
+        oauth_service, access_token=access_token, db=db, user_id=user_id
+    )
+    permissions_assumed = False
+    if not perm_names:
+        perm_names = sorted(POST_OAUTH_EXPORT_PERMISSIONS)
+        permissions_assumed = True
+        logger.warning(
+            f"No permissions API response for user {user_id}; requesting backfill with default export scopes"
+        )
+
+    client = GarminAPIClient(db, user_id)
+    backfill_result = request_initial_backfill(client, perm_names)
+    caps = build_garmin_capabilities(perm_names)
+    import_status = build_import_status_payload(db, user_id, 30)
+    base_url = settings.webapp_url.rstrip("/")
+
+    return {
+        "status": "requested",
+        "message": (
+            "Import aangevraagd bij Garmin. Activiteiten en gezondheid komen binnen via webhooks "
+            "(meestal binnen 2–15 minuten)."
+        ),
+        "permissions": perm_names,
+        "permissions_assumed": permissions_assumed,
+        "capabilities": caps,
+        "backfill": backfill_result,
+        "import_status": import_status.get("summary"),
+        "stored_records": import_status.get("stored_records"),
+        "webhook_urls": {
+            "health": f"{base_url}/garmin/webhook/health",
+            "activity": f"{base_url}/garmin/webhook/activity",
+        },
+        "webhook_setup_hint": (
+            "Zet in Garmin Developer → Endpoints de webhook-URL's hierboven. "
+            "Zonder webhooks blijft de database leeg na backfill."
+        ),
+    }
 
 
 def request_initial_backfill(
@@ -1658,19 +1746,11 @@ async def oauth_callback(
         db.commit()
 
         access_token = token_data["access_token"]
-        permissions = []
         try:
-            permissions = oauth_service.get_user_permissions(access_token)
-        except Exception as perm_exc:
-            # Do not fail OAuth — tokens are stored; permissions sync on next /auth/status.
-            logger.warning(f"Permissions not ready immediately after OAuth (user {user_id}): {perm_exc}")
-
-        try:
-            client = GarminAPIClient(db, user_id)
-            backfill_result = request_initial_backfill(client, permissions)
-            logger.info(f"Initial Garmin backfill requested after OAuth: {backfill_result}")
+            backfill_result = trigger_initial_import(db, user_id, access_token=access_token)
+            logger.info(f"Initial Garmin import after OAuth for user {user_id}: {backfill_result.get('status')}")
         except Exception as backfill_exc:
-            logger.warning(f"Initial Garmin backfill after OAuth failed: {backfill_exc}")
+            logger.warning(f"Initial Garmin import after OAuth failed: {backfill_exc}")
 
         # Redirect the user back to the web app after successful OAuth.
         from fastapi.responses import HTMLResponse
@@ -2435,6 +2515,23 @@ async def request_backfill(
 
     except Exception as e:
         logger.error(f"Backfill request failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/data/sync-initial")
+async def sync_initial_garmin_data(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    db: Session = Depends(get_db),
+):
+    """Trigger initial activity + health backfill (e.g. after connect or if import stayed empty)."""
+    try:
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        return trigger_initial_import(db, resolved_user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Sync initial import failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

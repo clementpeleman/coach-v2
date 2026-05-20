@@ -89,6 +89,9 @@
   function fetchGarminImportStatus(userId, periodDays = 30) {
     return getJson(`/garmin/data/import-status?user_id=${userId}&period_days=${periodDays}`);
   }
+  function requestInitialGarminSync(userId) {
+    return postJson(`/garmin/data/sync-initial?user_id=${userId}`, {});
+  }
   function fetchWeather(lat, lon) {
     return getJson(`/web/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
   }
@@ -155,6 +158,7 @@
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
     fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
+    requestInitialGarminSync,
     fetchTrainingProfile, fetchTrainingRecommendation, adjustTrainingRecommendation,
     createTrainingWorkout, getTrainingWorkoutFitUrl, uploadTrainingWorkoutToGarmin,
     fetchWeather,
