@@ -48,8 +48,10 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
     ? 'demo'
     : ([activitiesQuery.source, weeklyQuery.source].includes('live') ? 'live'
       : ([activitiesQuery.source, weeklyQuery.source].includes('stale-live') ? 'stale-live' : 'empty'));
-  const ringPct = (recoveryScore / 6);
-  const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
+  const scoreNum = recoveryScore ?? null;
+  const ringPct = scoreNum != null ? (scoreNum / 6) : 0;
+  const ringClass = scoreNum == null ? '' : scoreNum <= 2 ? 'bad' : scoreNum <= 3 ? 'warn' : '';
+  const recoveryLabel = scoreNum != null ? FC.recoveryLabel(scoreNum).toLowerCase() : 'laden…';
   const weatherLine = weather?.temperature_c != null
     ? `${weather.location_name || 'Huidige locatie'} · ${Math.round(weather.temperature_c)}°C ${weather.condition}`
     : (weather?.source === 'unavailable' ? 'Locatie niet gedeeld' : 'Weer laden…');
@@ -90,7 +92,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
             {' · '}{activeDate.toLocaleDateString('nl-BE', { day: '2-digit', month: 'long' })}
           </div>
           <h1>Goedemorgen, {D.user.firstName}.<br/>
-              <em>Vandaag voel je je </em><span style={{ color: 'var(--ink)' }}>{FC.recoveryLabel(recoveryScore).toLowerCase()}</span><em>.</em>
+              <em>Vandaag voel je je </em><span style={{ color: 'var(--ink)' }}>{recoveryLabel}</span><em>.</em>
           </h1>
         </div>
         <div className="meta">
@@ -118,11 +120,11 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
       )}
 
       {/* Hero workout card */}
-      <HeroWorkout rec={rec} draftWorkout={draftWorkout} score={recoveryScore} weather={weather} onNavigate={onNavigate} />
+      <HeroWorkout rec={rec} draftWorkout={draftWorkout} score={scoreNum ?? 3} weather={weather} onNavigate={onNavigate} />
 
       {/* Metric strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
-        <MetricStat label="Recovery" value={recoveryScore} unit="/6" ring={ringPct} ringClass={ringClass} />
+        <MetricStat label="Recovery" value={scoreNum ?? '—'} unit={scoreNum != null ? '/6' : ''} ring={scoreNum != null ? ringPct : undefined} ringClass={ringClass} />
         <MetricStat label="Body Battery" value={R.bodyBatteryCurrent ?? R.bodyBattery ?? '–'} unit={(R.bodyBatteryCurrent ?? R.bodyBattery) == null ? '' : "%"} sub={R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen HRV data'} />
         <MetricStat label="Sleep score" value={R.sleepScore ?? '–'} unit="" sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u slaap` : 'Geen slaapdata'} />
       </div>

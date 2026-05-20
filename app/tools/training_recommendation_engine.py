@@ -103,11 +103,19 @@ def build_recommendation(
     now = now or datetime.utcnow()
     recovery_score = _recovery_score(recovery)
     metrics = recovery.get("metrics") if isinstance(recovery, dict) else {}
-    workout_type = _type_from_recovery(recovery_score, metrics or {})
     patterns = (training_profile or {}).get("workout_patterns") or {}
+    from app.core.readiness import workout_type_from_readiness
+
+    workout_type = workout_type_from_readiness(
+        recovery_score if recovery_score is not None else 3,
+        metrics or {},
+        workout_patterns=patterns,
+    )
     pattern = (patterns.get("by_type") or {}).get(workout_type) or {}
-    sport_type = _choose_sport(workout_type, pattern)
+    sport_type = _choose_sport(workout_type, pattern, training_profile)
     duration_min = _planned_duration(workout_type, sport_type, pattern)
+    intensity_pct = 100
+    duration_min, intensity_pct = _apply_weather_adjustments(duration_min, intensity_pct, weather, workout_type)
     personal_profile = ((training_profile or {}).get("personal_targets") or {}).get(sport_type)
     blocks = normalize_workout_blocks(
         fit_blocks_to_duration(build_structure(workout_type, sport_type, personal_profile, pattern), duration_min),
@@ -129,7 +137,7 @@ def build_recommendation(
         "durationMin": duration_min,
         "targetMode": target_mode,
         "preferredTargetMode": target_mode,
-        "intensityPct": 100,
+        "intensityPct": intensity_pct,
         "blocks": blocks,
         "confidence": confidence,
         "source": "backend",
@@ -442,29 +450,60 @@ def _metric_plausible(sport_type: str, zone: str, metric: Optional[str]) -> bool
     return True
 
 
-def _type_from_recovery(score: int, metrics: Dict[str, Any]) -> str:
-    body_battery = metrics.get("bodyBatteryCurrent")
-    penalty = metrics.get("recentTrainingPenalty") or 0
-    if body_battery is not None and body_battery <= 25:
-        return "HERSTEL"
-    if penalty >= 1.1:
-        return "HERSTEL"
-    if score <= 2:
-        return "HERSTEL"
-    if score == 3:
-        return "DUUR"
-    if score == 4:
-        return "THRESHOLD"
-    return "VO2MAX"
+def _type_from_recovery(score: int, metrics: Dict[str, Any], workout_patterns: Optional[Dict[str, Any]] = None) -> str:
+    """Backward-compatible wrapper."""
+    from app.core.readiness import workout_type_from_readiness
+
+    return workout_type_from_readiness(score, metrics, workout_patterns=workout_patterns)
 
 
-def _choose_sport(workout_type: str, pattern: Dict[str, Any]) -> str:
+def _choose_sport(
+    workout_type: str,
+    pattern: Dict[str, Any],
+    training_profile: Optional[Dict[str, Any]] = None,
+) -> str:
     preferred = pattern.get("preferred_sport")
     if preferred in SPORT_TYPES:
         return preferred
+    dominant = (training_profile or {}).get("dominant_sport")
+    if dominant in SPORT_TYPES:
+        return dominant
+    sport_baselines = (training_profile or {}).get("sport_baselines") or {}
+    if sport_baselines:
+        top = max(sport_baselines.items(), key=lambda item: (item[1] or {}).get("current", {}).get("sessions", 0))
+        if top[0] in SPORT_TYPES:
+            return top[0]
     if workout_type == "HERSTEL":
         return "RUNNING"
     return "RUNNING"
+
+
+def _apply_weather_adjustments(
+    duration_min: int,
+    intensity_pct: int,
+    weather: Optional[Dict[str, Any]],
+    workout_type: str,
+) -> tuple[int, int]:
+    if not weather or weather.get("source") == "unavailable":
+        return duration_min, intensity_pct
+    feels = weather.get("apparent_temperature_c")
+    if feels is None:
+        feels = weather.get("temperature_c")
+    wind = weather.get("wind_speed_kmh") or 0
+    gust = weather.get("wind_gust_kmh") or 0
+    condition = str(weather.get("condition") or "").lower()
+    duration = duration_min
+    intensity = intensity_pct
+    if isinstance(feels, (int, float)) and feels >= 28:
+        duration = max(20, int(round(duration * 0.9)))
+        intensity = min(intensity, 95)
+    elif isinstance(feels, (int, float)) and feels <= 3:
+        duration = min(150, duration + 8)
+    if wind >= 28 or gust >= 45:
+        intensity = min(intensity, 98)
+    if condition == "onweer" and workout_type != "HERSTEL":
+        return duration, min(intensity, 90)
+    return duration, intensity
 
 
 def _planned_duration(workout_type: str, sport_type: str, pattern: Dict[str, Any]) -> int:
@@ -541,11 +580,15 @@ def _parse_numeric_range(value: Optional[str]) -> Optional[Dict[str, float]]:
 
 
 def _recovery_score(recovery: Optional[Dict[str, Any]]) -> int:
-    score = recovery.get("score") if isinstance(recovery, dict) else None
-    try:
-        return max(0, min(6, int(round(score if score is not None else 4))))
-    except Exception:
+    if not isinstance(recovery, dict):
         return 4
+    score = recovery.get("score")
+    if score is None:
+        return 3
+    try:
+        return max(0, min(6, int(round(score))))
+    except Exception:
+        return 3
 
 
 def _confidence(personal_profile: Optional[Dict[str, Any]], pattern: Dict[str, Any]) -> str:

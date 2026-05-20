@@ -17,11 +17,11 @@ function App() {
   ));
   const chatStorageKey = `fc_chat_messages_v1_${session.userId || 'demo'}`;
   const recoveryMetrics = recoverySnapshot?.metrics || (session.userId ? {} : window.FC_DATA.recovery);
-  const recoveryScore = currentReadinessScore(
-    recoverySnapshot?.score ?? (session.userId ? 0 : DEFAULT_RECOVERY),
-    recoveryMetrics,
-    recoverySnapshot?.source,
-  );
+  const recoveryScoreRaw = recoverySnapshot?.score;
+  const recoveryScore = session.userId
+    ? (recoveryScoreRaw ?? null)
+    : DEFAULT_RECOVERY;
+  const recoveryScoreForPlan = recoveryScore ?? 3;
   const [chatMessages, setChatMessages] = useStateApp(() => readStoredChat(chatStorageKey));
   const [chatThinking, setChatThinking] = useStateApp(false);
   const [draftWorkout, setDraftWorkout] = useStateApp(() => (
@@ -95,7 +95,7 @@ function App() {
       setDraftWorkout((current) => (
         current && current.source === 'auto'
           ? current
-          : window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore, trainingProfile: null })
+          : window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore: recoveryScoreForPlan, trainingProfile: null })
       ));
       return;
     }
@@ -135,7 +135,7 @@ function App() {
       }
     });
     return () => { cancelled = true; };
-  }, [apiStatus.status, session.userId, recoveryScore, trainingProfile?._updatedAt, weather?.observed_at]);
+  }, [apiStatus.status, session.userId, recoveryScoreForPlan, trainingProfile?._updatedAt, weather?.observed_at]);
 
   useEffectApp(() => {
     window.FC_SET_DRAFT_WORKOUT = (updater) => setDraftWorkout(updater);
@@ -394,23 +394,6 @@ function isLegacyDemoChat(messages) {
     && messages[1]?.content === legacyUserText
     && messages[2]?.role === 'assistant'
     && messages[2]?.content === legacyAssistantText;
-}
-
-function currentReadinessScore(score, metrics, live) {
-  if (!['live', 'stale-live'].includes(live) || !metrics || score == null) return score;
-  let adjusted = score;
-  const currentBattery = metrics.bodyBatteryCurrent;
-  const trainingPenalty = metrics.recentTrainingPenalty || 0;
-
-  if (currentBattery != null) {
-    if (currentBattery <= 15) adjusted = Math.min(adjusted, 2);
-    else if (currentBattery <= 25) adjusted = Math.min(adjusted, 3);
-    else if (currentBattery <= 35 && trainingPenalty >= 0.8) adjusted = Math.min(adjusted, 3);
-  }
-  if (trainingPenalty >= 1.1) adjusted = Math.min(adjusted, 3);
-  if (trainingPenalty >= 1.1 && currentBattery != null && currentBattery <= 25) adjusted = Math.min(adjusted, 2);
-
-  return adjusted;
 }
 
 function readAppLiveCache(key) {

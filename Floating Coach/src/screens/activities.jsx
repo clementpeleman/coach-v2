@@ -308,16 +308,16 @@ function TrendCard({ weeklyTrend, activities, period, sportFilter, sportBaseline
   const loadPct = Math.max(0, Math.min(100, ((loadRatio || 0) / 1.6) * 100));
   const loadLabel = !loadRatio
     ? 'nog niet genoeg data'
-    : loadRatio < 0.8
+    : loadRatio < 0.75
       ? 'lage belasting'
-      : loadRatio <= 1.3
+      : loadRatio <= 1.25
         ? 'stabiele opbouw'
         : 'hoge sprong';
   const headline = period === 7
     ? `Recente belasting voor ${sportScopeLabel(sportFilter)}`
-    : loadRatio && loadRatio > 1.3
+    : loadRatio && loadRatio > 1.25
       ? 'Belasting stijgt snel'
-      : loadRatio && loadRatio < 0.8
+      : loadRatio && loadRatio < 0.75
         ? 'Belasting ligt lager dan je basis'
         : 'Belasting blijft in balans';
   const scopeText = sportFilter === 'ALL'

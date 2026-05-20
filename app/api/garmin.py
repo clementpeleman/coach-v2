@@ -660,31 +660,21 @@ def _classify_effort(activity: GarminActivityData, sport_max_hr: Optional[int]) 
     if any(word in name for word in ["interval", "vo2", "sprint"]):
         return "vo2"
 
-    avg_hr = activity.average_heart_rate
-    if avg_hr and sport_max_hr:
-        ratio = avg_hr / sport_max_hr
-        if ratio < 0.70:
-            return "easy"
-        if ratio < 0.80:
-            return "endurance"
-        if ratio < 0.90:
-            return "threshold"
-        return "vo2"
+    from app.core.hr_profile import classify_effort_from_hr
+
+    effort = classify_effort_from_hr(activity.average_heart_rate, sport_max_hr, sport_max_hr)
+    if effort:
+        return effort
 
     return "endurance"
 
 
 def _classify_segment_effort(segment: Dict, sport_max_hr: Optional[int], metric: Optional[float], sport: str) -> str:
-    hr = segment.get("heart_rate")
-    if hr and sport_max_hr:
-        ratio = hr / sport_max_hr
-        if ratio < 0.70:
-            return "easy"
-        if ratio < 0.80:
-            return "endurance"
-        if ratio < 0.90:
-            return "threshold"
-        return "vo2"
+    from app.core.hr_profile import classify_effort_from_hr
+
+    effort = classify_effort_from_hr(segment.get("heart_rate"), sport_max_hr, sport_max_hr)
+    if effort:
+        return effort
 
     duration = segment.get("duration_seconds") or 0
     if duration >= 1200:
@@ -746,10 +736,9 @@ def build_personal_training_profile(
 
     profile: Dict[str, Dict] = {}
     for sport, sport_activities in sports.items():
-        sport_max_hr = max(
-            [a.max_heart_rate for a in sport_activities if a.max_heart_rate],
-            default=None,
-        )
+        from app.core.hr_profile import resolve_hr_profile
+
+        sport_max_hr = resolve_hr_profile(sport_activities).effective_max
         metric_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
         hr_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
         detail_metric_values: dict[str, list[float]] = {"easy": [], "endurance": [], "threshold": [], "vo2": []}
@@ -1482,90 +1471,10 @@ def _valid_stress_values(values: Dict) -> list[int]:
 
 
 def _recent_training_fatigue(activities: list[GarminActivityData]) -> Dict:
-    """Estimate short-term fatigue from recent sessions until Garmin training load is available."""
-    now = datetime.utcnow()
-    session_summaries = []
-    weighted_load = 0.0
-    hardest = None
+    """Delegate to canonical fatigue model (% max HR)."""
+    from app.core.readiness import compute_recent_fatigue
 
-    for activity in activities:
-        duration_min = (activity.duration or 0) / 60
-        if duration_min <= 0:
-            continue
-
-        hours_ago = max(0.0, (now - activity.start_time).total_seconds() / 3600) if activity.start_time else 0.0
-        avg_hr = activity.average_heart_rate or 0
-        max_hr = activity.max_heart_rate or 0
-        activity_type = (activity.activity_type or "").upper()
-
-        intensity = 1.0
-        if avg_hr >= 160:
-            intensity += 0.45
-        elif avg_hr >= 145:
-            intensity += 0.25
-        elif avg_hr >= 130:
-            intensity += 0.10
-        if max_hr >= 185:
-            intensity += 0.15
-        if "RUN" in activity_type:
-            intensity += 0.10
-
-        decay = max(0.35, 1 - (hours_ago / 72))
-        session_load = duration_min * intensity * decay
-        weighted_load += session_load
-
-        summary = {
-            "activity_id": activity.activity_id,
-            "activity_name": activity.activity_name,
-            "activity_type": activity.activity_type,
-            "start_time": activity.start_time.isoformat() if activity.start_time else None,
-            "hours_ago": round(hours_ago, 1),
-            "duration_minutes": round(duration_min),
-            "average_heart_rate": activity.average_heart_rate,
-            "max_heart_rate": activity.max_heart_rate,
-            "load": round(session_load, 1),
-        }
-        session_summaries.append(summary)
-        if hardest is None or summary["load"] > hardest["load"]:
-            hardest = summary
-
-    penalty = 0.0
-    if weighted_load >= 100:
-        penalty = 1.6
-    elif weighted_load >= 70:
-        penalty = 1.2
-    elif weighted_load >= 45:
-        penalty = 0.8
-    elif weighted_load >= 25:
-        penalty = 0.4
-
-    for session in session_summaries:
-        if (
-            session["hours_ago"] <= 36
-            and session["duration_minutes"] >= 40
-            and (
-                (session["average_heart_rate"] or 0) >= 155
-                or (session["max_heart_rate"] or 0) >= 185
-            )
-        ):
-            penalty = max(penalty, 1.1)
-
-    label = "laag"
-    if penalty >= 1.2:
-        label = "hoog"
-    elif penalty >= 0.8:
-        label = "matig-hoog"
-    elif penalty >= 0.4:
-        label = "matig"
-
-    return {
-        "load": round(weighted_load, 1),
-        "penalty": penalty,
-        "label": label,
-        "recent_activity_count": len(session_summaries),
-        "hardest_activity": hardest,
-        "sessions": session_summaries[:5],
-    }
+    return compute_recent_fatigue(activities)
 
 
 def _recovery_score(
@@ -1575,44 +1484,24 @@ def _recovery_score(
     body_battery: Optional[int],
     hrv: Optional[int],
     recent_training_penalty: float = 0.0,
+    *,
+    hrv_history: Optional[list] = None,
 ) -> int:
-    score = 3.0
+    """Delegate to canonical readiness module."""
+    from app.config import settings
+    from app.core.readiness import compute_readiness_score
 
-    if sleep_score is not None:
-        score += (sleep_score - 70) / 15
-    elif sleep_hours is not None:
-        score += (sleep_hours - 7) / 1.5
-
-    if avg_stress is not None:
-        score += (45 - avg_stress) / 20
-
-    if body_battery is not None:
-        score += (body_battery - 50) / 25
-
-    if hrv is not None:
-        # Without a personal baseline we only apply a small stabilising signal.
-        score += (hrv - 45) / 35
-
-    score -= recent_training_penalty
-
-    rounded = max(0, min(6, int(round(score))))
-
-    # This score answers "how ready am I right now?", not only "how well did I wake up?".
-    # Very low current Body Battery and recent hard sessions should block hard training.
-    if body_battery is not None:
-        if body_battery <= 15:
-            rounded = min(rounded, 2)
-        elif body_battery <= 25:
-            rounded = min(rounded, 3)
-        elif body_battery <= 35 and recent_training_penalty >= 0.8:
-            rounded = min(rounded, 3)
-
-    if recent_training_penalty >= 1.1:
-        rounded = min(rounded, 3)
-    if recent_training_penalty >= 1.1 and body_battery is not None and body_battery <= 25:
-        rounded = min(rounded, 2)
-
-    return rounded
+    result = compute_readiness_score(
+        sleep_score=sleep_score,
+        sleep_hours=sleep_hours,
+        avg_stress=avg_stress,
+        body_battery=body_battery,
+        hrv=hrv,
+        hrv_history=hrv_history,
+        recent_training_penalty=recent_training_penalty,
+        version=settings.readiness_version,
+    )
+    return result.score if result.score is not None else 0
 
 
 def build_weekly_summary(
@@ -2429,173 +2318,16 @@ async def get_recovery_snapshot(
 ):
     """Return the latest Garmin health metrics needed by the app recovery UI."""
     try:
+        from app.config import settings
+        from app.core.recovery_snapshot import build_live_recovery_snapshot
+
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
-        since = datetime.utcnow() - timedelta(days=lookback_days)
-
-        daily_record = _latest_health_record(db, resolved_user_id, "dailies", since)
-        sleep_record = _latest_health_record(db, resolved_user_id, "sleeps", since)
-        stress_record = _latest_health_record(db, resolved_user_id, "stressDetails", since)
-        hrv_record = _latest_health_record(db, resolved_user_id, "hrv", since)
-        recent_activities = (
-            db.query(GarminActivityData)
-            .filter(
-                GarminActivityData.user_id == resolved_user_id,
-                GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
-                GarminActivityData.start_time >= datetime.utcnow() - timedelta(hours=48),
-            )
-            .order_by(GarminActivityData.start_time.desc())
-            .all()
+        return build_live_recovery_snapshot(
+            db,
+            resolved_user_id,
+            lookback_days=lookback_days,
+            readiness_version=settings.readiness_version,
         )
-
-        daily = _load_health_payload(daily_record)
-        sleep = _load_health_payload(sleep_record)
-        stress = _load_health_payload(stress_record)
-        hrv = _load_health_payload(hrv_record)
-
-        if not any([daily, sleep, stress, hrv]):
-            return {
-                "source": "empty",
-                "calendar_date": None,
-                "score": None,
-                "metrics": None,
-                "message": "No Garmin health data found yet. Sync Garmin Connect or request a backfill.",
-            }
-
-        stress_values = _valid_stress_values(stress.get("timeOffsetStressLevelValues", {}))
-        body_battery_series = _valid_numeric_offset_series(stress.get("timeOffsetBodyBatteryValues", {}))
-        body_battery_values = [value for _, value in body_battery_series]
-        hrv_values = _valid_numeric_values(hrv.get("hrvValues", {}))
-        heart_rate_values = _valid_numeric_values(daily.get("timeOffsetHeartRateSamples", {}))
-
-        sleep_duration_seconds = sleep.get("durationInSeconds")
-        sleep_hours = round(sleep_duration_seconds / 3600, 1) if sleep_duration_seconds else None
-        sleep_score = _sleep_score(sleep)
-        avg_stress = round(sum(stress_values) / len(stress_values)) if stress_values else None
-        body_battery_at_wake = _body_battery_at_wake(stress, sleep)
-        body_battery_current = round(body_battery_values[-1]) if body_battery_values else None
-        body_battery_current_at = None
-        body_battery_current_age_hours = None
-        stress_start = stress.get("startTimeInSeconds")
-        if body_battery_series and isinstance(stress_start, (int, float)):
-            last_offset, _ = body_battery_series[-1]
-            body_battery_current_dt = datetime.utcfromtimestamp(int(stress_start + last_offset))
-            body_battery_current_at = body_battery_current_dt.isoformat()
-            body_battery_current_age_hours = max(
-                0.0,
-                (datetime.utcnow() - body_battery_current_dt).total_seconds() / 3600,
-            )
-        stale_signals = []
-        if body_battery_current is None:
-            stale_signals.append("bodyBatteryCurrent_missing")
-        elif body_battery_current_age_hours is not None and body_battery_current_age_hours > 6:
-            stale_signals.append("bodyBatteryCurrent_stale")
-        body_battery_for_score = body_battery_current if not any(
-            signal.startswith("bodyBatteryCurrent_") for signal in stale_signals
-        ) else None
-        hrv_overnight = (
-            int(hrv.get("lastNightAvg"))
-            if isinstance(hrv.get("lastNightAvg"), (int, float))
-            else (round(sum(hrv_values) / len(hrv_values)) if hrv_values else None)
-        )
-        if not stress_values:
-            stale_signals.append("stress_missing")
-        if not hrv_overnight:
-            stale_signals.append("hrv_missing")
-        if sleep_score is None and sleep_hours is None:
-            stale_signals.append("sleep_missing")
-
-        current_hr = round(heart_rate_values[-1]) if heart_rate_values else daily.get("averageHeartRateInBeatsPerMinute")
-        hr_trend = [round(value) for value in heart_rate_values[-60:]]
-
-        date_candidates = [
-            payload.get("calendarDate")
-            for payload in [sleep, daily, stress, hrv]
-            if payload.get("calendarDate")
-        ]
-        calendar_date = date_candidates[0] if date_candidates else None
-        training_fatigue = _recent_training_fatigue(recent_activities)
-
-        score = _recovery_score(
-            sleep_score=sleep_score,
-            sleep_hours=sleep_hours,
-            avg_stress=avg_stress,
-            body_battery=body_battery_for_score,
-            hrv=hrv_overnight,
-            recent_training_penalty=training_fatigue["penalty"],
-        )
-        if body_battery_for_score is None and training_fatigue["penalty"] >= 0.4:
-            score = min(score, 3)
-        score_inputs = {
-            "sleepScore": sleep_score,
-            "sleepHours": sleep_hours,
-            "avgStress": avg_stress,
-            "bodyBatteryCurrent": body_battery_for_score,
-            "bodyBatteryCurrentAt": body_battery_current_at,
-            "bodyBatteryCurrentAgeHours": round(body_battery_current_age_hours, 1) if body_battery_current_age_hours is not None else None,
-            "hrvOvernight": hrv_overnight,
-            "recentTrainingPenalty": training_fatigue["penalty"],
-        }
-        score_confidence = "high"
-        if stale_signals:
-            score_confidence = "medium" if body_battery_for_score is not None else "low"
-        if len(stale_signals) >= 3:
-            score_confidence = "low"
-
-        return {
-            "source": "live",
-            "calendar_date": calendar_date,
-            "score": score,
-            "score_model": {
-                "version": "current_readiness_v3",
-                "scale": "0-6",
-                "confidence": score_confidence,
-                "stale_signals": stale_signals,
-                "inputs": score_inputs,
-                "notes": [
-                    "Health signals use sleep, stress, current Body Battery and HRV.",
-                    "Recent training reduces the score for 48h based on duration and heart-rate intensity.",
-                    "Very low current Body Battery caps readiness even after a good night of sleep.",
-                ],
-            },
-            "scoreConfidence": score_confidence,
-            "staleSignals": stale_signals,
-            "scoreInputs": score_inputs,
-            "metrics": {
-                "sleepScore": sleep_score,
-                "sleepHours": sleep_hours,
-                "deepSleepMin": _minutes(sleep.get("deepSleepDurationInSeconds")),
-                "remMin": _minutes(sleep.get("remSleepInSeconds")),
-                "lightMin": _minutes(sleep.get("lightSleepDurationInSeconds")),
-                "awakeMin": _minutes(sleep.get("awakeDurationInSeconds")),
-                "avgStress": avg_stress,
-                "bodyBattery": body_battery_for_score,
-                "bodyBatteryAtWake": body_battery_at_wake,
-                "bodyBatteryCurrent": body_battery_current,
-                "bodyBatteryCurrentAt": body_battery_current_at,
-                "bodyBatteryScoreSource": "current" if body_battery_for_score is not None else None,
-                "hrvOvernight": hrv_overnight,
-                "restingHr": daily.get("restingHeartRateInBeatsPerMinute"),
-                "currentHeartRate": current_hr,
-                "hrvTrend": [round(value) for value in hrv_values[-7:]],
-                "stressTrend": stress_values[-24:],
-                "hrTrend": hr_trend,
-                "steps": daily.get("steps"),
-                "activeKilocalories": daily.get("activeKilocalories"),
-                "distanceMeters": daily.get("distanceInMeters"),
-                "recentTrainingLoad": training_fatigue["load"],
-                "recentTrainingPenalty": training_fatigue["penalty"],
-                "recentTrainingLabel": training_fatigue["label"],
-                "recentActivityCount48h": training_fatigue["recent_activity_count"],
-                "hardestRecentActivity": training_fatigue["hardest_activity"],
-            },
-            "recent_training": training_fatigue,
-            "records": {
-                "daily": daily_record.summary_id if daily_record else None,
-                "sleep": sleep_record.summary_id if sleep_record else None,
-                "stress": stress_record.summary_id if stress_record else None,
-                "hrv": hrv_record.summary_id if hrv_record else None,
-            },
-        }
     except Exception as e:
         logger.error(f"Recovery snapshot failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

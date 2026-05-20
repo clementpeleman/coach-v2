@@ -80,6 +80,9 @@ class Settings(BaseSettings):
         description="Comma-separated allowed CORS origins",
     )
 
+    # Readiness algorithm: readiness_v4 (personalized HR/HRV) or current_readiness_v3 (legacy)
+    readiness_version: str = Field(default="readiness_v4")
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
