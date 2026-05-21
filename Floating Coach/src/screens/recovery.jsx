@@ -239,9 +239,8 @@ function buildRecoveryScoreBreakdown(recoveryScore, metrics = {}, snapshot = {})
     addRow('stress', 'Stress 24u', 'ontbreekt', 'niet meegeteld', null, 'Geen recente stressreeks beschikbaar.');
   }
 
-  const bodyBatteryCurrent = numberOrNull(
-    hasScoreInputs ? inputs.bodyBatteryCurrent : (inputs.bodyBatteryCurrent ?? metrics.bodyBatteryCurrent ?? metrics.bodyBattery),
-  );
+  const bodyBatteryStale = staleSignals.some((signal) => String(signal).startsWith('bodyBatteryCurrent_'));
+  const bodyBatteryCurrent = bodyBatteryForScore(inputs, metrics, hasScoreInputs, bodyBatteryStale);
   const measuredBodyBatteryCurrent = numberOrNull(metrics.bodyBatteryCurrent ?? metrics.bodyBattery);
   if (bodyBatteryCurrent != null) {
     addRow(
@@ -332,7 +331,19 @@ function buildRecoveryScoreBreakdown(recoveryScore, metrics = {}, snapshot = {})
   };
 }
 
+function bodyBatteryForScore(inputs, metrics, hasScoreInputs, bodyBatteryStale) {
+  if (hasScoreInputs) {
+    if (Object.prototype.hasOwnProperty.call(inputs, 'bodyBatteryCurrent')) {
+      return bodyBatteryStale ? null : numberOrNull(inputs.bodyBatteryCurrent);
+    }
+    return bodyBatteryStale ? null : numberOrNull(metrics.bodyBattery);
+  }
+  if (bodyBatteryStale) return null;
+  return numberOrNull(metrics.bodyBattery ?? metrics.bodyBatteryCurrent ?? metrics.bodyBattery);
+}
+
 function numberOrNull(value) {
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
