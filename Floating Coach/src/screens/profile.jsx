@@ -13,6 +13,7 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
   const [importStatus, setImportStatus] = useStateP(null);
   const [syncing, setSyncing] = useStateP(false);
   const [syncMsg, setSyncMsg] = useStateP(null);
+  const [importLog, setImportLog] = useStateP([]);
   const garminConnected = profile?.garmin_connected ?? false;
 
   const loadImportStatus = () => {
@@ -66,19 +67,32 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
     if (!userId || !online) return;
     setSyncing(true);
     setSyncMsg(null);
+    setImportLog([]);
     try {
       const res = await window.FC_API.requestInitialGarminSync(userId);
       const sessions = res?.import_status?.activity_sessions;
-      const extra = sessions != null ? ` (${sessions} activiteiten in de laatste 30 dagen)` : '';
+      const health = res?.import_status?.health_records;
+      const extra = sessions != null
+        ? ` (${sessions} activiteiten, ${health ?? '?'} gezondheid — 30 dagen)`
+        : '';
       setSyncMsg((res.message || 'Import gestart. Even geduld…') + extra);
+      setImportLog(Array.isArray(res.import_log) ? res.import_log : []);
       try { window.localStorage.setItem(`fc_initial_sync_${userId}`, 'done'); } catch (_) {}
       setTimeout(loadImportStatus, 3000);
       setTimeout(loadImportStatus, 15000);
     } catch (e) {
       setSyncMsg(FCU.formatApiError(e.message));
+      setImportLog([]);
     } finally {
       setSyncing(false);
     }
+  };
+
+  const logLevelColor = (level) => {
+    if (level === 'error') return 'var(--bad)';
+    if (level === 'warn') return 'var(--warn)';
+    if (level === 'ok') return 'var(--good)';
+    return 'var(--ink-3)';
   };
 
   const summary = importStatus?.summary || {};
@@ -133,6 +147,45 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
           </div>
           {syncMsg && (
             <p style={{ marginTop: 12, fontSize: 13, color: 'var(--ink-2)' }}>{syncMsg}</p>
+          )}
+          {importLog.length > 0 && (
+            <div style={{
+              marginTop: 16,
+              padding: '14px 16px',
+              background: 'var(--surface-2, oklch(96% 0.005 100))',
+              borderRadius: 8,
+              maxHeight: 320,
+              overflowY: 'auto',
+            }}>
+              <div className="mono" style={{
+                fontSize: 10,
+                textTransform: 'uppercase',
+                letterSpacing: '.12em',
+                color: 'var(--ink-4)',
+                marginBottom: 10,
+              }}>
+                Import-log
+              </div>
+              <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {importLog.map((entry, idx) => (
+                  <li key={`${entry.at || idx}-${entry.step}-${idx}`} style={{ fontSize: 12, lineHeight: 1.45 }}>
+                    <span className="mono" style={{ color: 'var(--ink-4)', marginRight: 8 }}>
+                      {entry.at ? entry.at.replace('T', ' ').replace('Z', '').slice(11, 19) : '--:--:--'}
+                    </span>
+                    <span className="mono" style={{
+                      color: logLevelColor(entry.level),
+                      marginRight: 8,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      fontSize: 10,
+                    }}>
+                      {entry.step || 'log'}
+                    </span>
+                    <span style={{ color: 'var(--ink-2)' }}>{entry.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {!hasData && (
             <p style={{ marginTop: 12, fontSize: 12, color: 'var(--ink-4)', lineHeight: 1.45 }}>

@@ -424,3 +424,171 @@ def build_import_message(
             "historiek via webhook kan enkele minuten duren."
         )
     return " ".join(parts)
+
+
+def _log_entry(level: str, step: str, message: str) -> Dict[str, str]:
+    return {
+        "at": datetime.utcnow().isoformat() + "Z",
+        "level": level,
+        "step": step,
+        "message": message,
+    }
+
+
+def build_import_log(
+    *,
+    user_id: int,
+    garmin_user_id: Optional[str],
+    permissions: List[str],
+    permissions_assumed: bool,
+    capabilities: Dict[str, Any],
+    replay_result: Optional[Dict[str, Any]],
+    backfill_result: Dict[str, Any],
+    backfill_summary: Dict[str, Any],
+    import_summary: Optional[Dict[str, Any]],
+    webhook_status_counts: Optional[Dict[str, int]] = None,
+) -> List[Dict[str, str]]:
+    """Structured import steps for UI + server logs."""
+    log: List[Dict[str, str]] = []
+    log.append(_log_entry(
+        "info",
+        "start",
+        f"Import gestart voor user {user_id}"
+        + (f" (Garmin {garmin_user_id})" if garmin_user_id else ""),
+    ))
+
+    if permissions_assumed:
+        log.append(_log_entry(
+            "warn",
+            "permissions",
+            "Garmin permissions API leeg — import met standaard scopes.",
+        ))
+    else:
+        log.append(_log_entry(
+            "ok",
+            "permissions",
+            "Permissions: " + ", ".join(sorted(permissions)) if permissions else "geen permissions ontvangen",
+        ))
+
+    missing = capabilities.get("missing_required_for_initial_import") or []
+    if missing:
+        log.append(_log_entry("error", "permissions", f"Ontbrekend voor historiek: {', '.join(missing)}"))
+    elif capabilities.get("ready_for_initial_import"):
+        log.append(_log_entry("ok", "permissions", "Klaar voor activiteiten-backfill (ACTIVITY + HISTORICAL)."))
+
+    replay = replay_result or {}
+    replay_line = (
+        f"Webhook replay: {replay.get('attempted', 0)} geprobeerd, "
+        f"{replay.get('replayed', 0)} ok, {replay.get('stored_items', 0)} records, "
+        f"{replay.get('still_failed', 0)} mislukt"
+    )
+    if replay.get("event_ids"):
+        replay_line += f" (events {replay['event_ids']})"
+    log.append(_log_entry(
+        "ok" if replay.get("still_failed", 0) == 0 else "warn",
+        "replay",
+        replay_line,
+    ))
+    for err in (replay.get("errors") or [])[:5]:
+        log.append(_log_entry("warn", "replay", str(err)))
+
+    activity_backfill = (backfill_result.get("activity") or {})
+    if backfill_result.get("skipped", {}).get("activity"):
+        log.append(_log_entry(
+            "error",
+            "backfill",
+            "Activiteiten-backfill overgeslagen (permissions).",
+        ))
+    elif not activity_backfill:
+        log.append(_log_entry("warn", "backfill", "Geen activiteiten-backfill aangevraagd."))
+    else:
+        for data_type, windows in activity_backfill.items():
+            if not isinstance(windows, list):
+                continue
+            for window in windows:
+                status = window.get("status") or "unknown"
+                level = "ok" if status in REQUESTED_BACKFILL_STATUSES else (
+                    "warn" if status in {"duplicate", "rate_limited", "skipped"} else "error"
+                )
+                notes = "; ".join(window.get("notes") or [])
+                log.append(_log_entry(
+                    level,
+                    "backfill",
+                    f"Activiteit {data_type}: {status}"
+                    + (f" — {notes}" if notes else "")
+                    + f" ({window.get('requested_start', '?')[:10]} → {window.get('end', '?')[:10]})",
+                ))
+
+    health_backfill = backfill_result.get("health") or {}
+    if backfill_result.get("skipped", {}).get("health"):
+        log.append(_log_entry("error", "backfill", "Gezondheid-backfill overgeslagen (HEALTH_EXPORT)."))
+    else:
+        for entry in health_backfill.values():
+            if not isinstance(entry, list):
+                continue
+            for window in entry:
+                if not isinstance(window, dict):
+                    continue
+                status = window.get("status") or "unknown"
+                level = "ok" if status in REQUESTED_BACKFILL_STATUSES else (
+                    "warn" if status in {"duplicate", "rate_limited", "skipped"} else "error"
+                )
+                notes = "; ".join(window.get("notes") or [])
+                log.append(_log_entry(
+                    level,
+                    "backfill",
+                    f"Gezondheid {window.get('type', '?')}: {status}"
+                    + (f" — {notes}" if notes else ""),
+                ))
+
+    summary = import_summary or {}
+    log.append(_log_entry(
+        "info",
+        "database",
+        f"Database nu: {summary.get('activity_sessions', 0)} activiteiten, "
+        f"{summary.get('health_records', 0)} gezondheidsrecords (30 dagen).",
+    ))
+
+    if webhook_status_counts:
+        partial = sum(v for k, v in webhook_status_counts.items() if k.endswith(":partial"))
+        failed = sum(v for k, v in webhook_status_counts.items() if k.endswith(":failed"))
+        if partial or failed:
+            log.append(_log_entry(
+                "warn",
+                "webhooks",
+                f"Webhook status 30d: {partial} partial, {failed} failed — "
+                "wacht op Garmin of klik opnieuw importeren.",
+            ))
+        else:
+            log.append(_log_entry("ok", "webhooks", "Geen partial/failed webhooks in de laatste 30 dagen."))
+
+    if backfill_summary.get("all_duplicate") and (summary.get("activity_sessions") or 0) <= 1:
+        log.append(_log_entry(
+            "warn",
+            "done",
+            "Garmin duplicate backfill: historische activiteiten worden niet opnieuw gestuurd. "
+            "Nieuwe syncs met Garmin Connect verschijnen wel automatisch.",
+        ))
+    elif backfill_summary.get("requested_count", 0) > 0:
+        log.append(_log_entry(
+            "info",
+            "done",
+            "Backfill aangevraagd — data komt binnen 2–15 min via webhooks. Garmin verbonden laten.",
+        ))
+    else:
+        log.append(_log_entry("ok", "done", "Import afgerond."))
+
+    return log
+
+
+def emit_import_log(logger_obj, user_id: int, entries: List[Dict[str, str]]) -> None:
+    """Write structured import log lines to server logs."""
+    for entry in entries:
+        line = f"[Garmin import user={user_id}] [{entry['step']}] {entry['message']}"
+        level = entry.get("level", "info")
+        if level == "error":
+            logger_obj.error(line)
+        elif level == "warn":
+            logger_obj.warning(line)
+        else:
+            logger_obj.info(line)

@@ -133,7 +133,9 @@ def trigger_initial_import(
     """
     from app.core.garmin_import import (
         activity_backfill_summary,
+        build_import_log,
         build_import_message,
+        emit_import_log,
         garmin_user_id_for_internal_user,
         replay_failed_webhooks,
     )
@@ -142,10 +144,20 @@ def trigger_initial_import(
     if not access_token:
         access_token = oauth_service.get_valid_access_token(db, user_id)
     if not access_token:
+        err_log = [{
+            "at": datetime.utcnow().isoformat() + "Z",
+            "level": "error",
+            "step": "token",
+            "message": "Geen geldige Garmin-token. Verbind Garmin opnieuw.",
+        }]
+        emit_import_log(logger, user_id, err_log)
         return {
             "status": "error",
             "message": "Geen geldige Garmin-token. Verbind Garmin opnieuw.",
+            "import_log": err_log,
         }
+
+    garmin_user_id = garmin_user_id_for_internal_user(db, user_id)
 
     perm_names = fetch_permissions_with_retry(
         oauth_service, access_token=access_token, db=db, user_id=user_id
@@ -168,9 +180,23 @@ def trigger_initial_import(
     backfill_summary = activity_backfill_summary(backfill_result)
     import_status = build_import_status_payload(db, user_id, 30)
     activity_sessions = import_status.get("summary", {}).get("activity_sessions", 0) or 0
+    webhook_status_counts = (import_status.get("webhooks") or {}).get("status_counts") or {}
 
     caps = build_garmin_capabilities(perm_names)
     base_url = settings.webapp_url.rstrip("/")
+    import_log = build_import_log(
+        user_id=user_id,
+        garmin_user_id=garmin_user_id,
+        permissions=perm_names,
+        permissions_assumed=permissions_assumed,
+        capabilities=caps,
+        replay_result=replay_result,
+        backfill_result=backfill_result,
+        backfill_summary=backfill_summary,
+        import_summary=import_status.get("summary"),
+        webhook_status_counts=webhook_status_counts,
+    )
+    emit_import_log(logger, user_id, import_log)
     message = build_import_message(
         activity_sessions=activity_sessions,
         backfill_summary=backfill_summary,
@@ -189,6 +215,7 @@ def trigger_initial_import(
         "backfill": backfill_result,
         "backfill_summary": backfill_summary,
         "webhook_replay": replay_result,
+        "import_log": import_log,
         "import_status": import_status.get("summary"),
         "stored_records": import_status.get("stored_records"),
         "webhook_urls": {
@@ -2549,7 +2576,12 @@ async def replay_webhooks(
 ):
     """Re-process stored partial/failed Garmin webhook payloads for this account."""
     try:
-        from app.core.garmin_import import garmin_user_id_for_internal_user, replay_failed_webhooks
+        from app.core.garmin_import import (
+            build_import_log,
+            emit_import_log,
+            garmin_user_id_for_internal_user,
+            replay_failed_webhooks,
+        )
 
         resolved_user_id = resolve_user_id(user_id, telegram_user_id)
         replay = replay_failed_webhooks(
@@ -2560,9 +2592,23 @@ async def replay_webhooks(
             limit=100,
         )
         import_status = build_import_status_payload(db, resolved_user_id, 30)
+        import_log = build_import_log(
+            user_id=resolved_user_id,
+            garmin_user_id=garmin_user_id_for_internal_user(db, resolved_user_id),
+            permissions=[],
+            permissions_assumed=False,
+            capabilities={"ready_for_initial_import": True, "missing_required_for_initial_import": []},
+            replay_result=replay,
+            backfill_result={"activity": {}, "health": {}, "skipped": {}},
+            backfill_summary={"all_duplicate": False, "requested_count": 0, "skipped_permissions": False},
+            import_summary=import_status.get("summary"),
+            webhook_status_counts=(import_status.get("webhooks") or {}).get("status_counts"),
+        )
+        emit_import_log(logger, resolved_user_id, import_log)
         return {
             "status": "success",
             "webhook_replay": replay,
+            "import_log": import_log,
             "import_status": import_status.get("summary"),
         }
     except HTTPException:
