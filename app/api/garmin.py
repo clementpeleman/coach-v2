@@ -2540,6 +2540,38 @@ async def request_backfill(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/data/replay-webhooks")
+async def replay_webhooks(
+    user_id: Optional[int] = Query(None, description="Internal user ID"),
+    telegram_user_id: Optional[int] = Query(None, description="Legacy Telegram user ID"),
+    hours: int = Query(168, ge=1, le=720, description="How far back to scan failed webhook events"),
+    db: Session = Depends(get_db),
+):
+    """Re-process stored partial/failed Garmin webhook payloads for this account."""
+    try:
+        from app.core.garmin_import import garmin_user_id_for_internal_user, replay_failed_webhooks
+
+        resolved_user_id = resolve_user_id(user_id, telegram_user_id)
+        replay = replay_failed_webhooks(
+            db,
+            resolved_user_id,
+            garmin_user_id=garmin_user_id_for_internal_user(db, resolved_user_id),
+            hours=hours,
+            limit=100,
+        )
+        import_status = build_import_status_payload(db, resolved_user_id, 30)
+        return {
+            "status": "success",
+            "webhook_replay": replay,
+            "import_status": import_status.get("summary"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Webhook replay failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/data/sync-initial")
 async def sync_initial_garmin_data(
     user_id: Optional[int] = Query(None, description="Internal user ID"),

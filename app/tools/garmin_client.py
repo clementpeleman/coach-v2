@@ -120,29 +120,30 @@ class GarminAPIClient:
             summaries: List of summary data dicts
         """
         for summary in summaries:
-            summary_id = summary.get('summaryId')
+            summary_id = summary.get("summaryId")
+            start_time = None
+            if "startTimeInSeconds" in summary:
+                start_time = datetime.utcfromtimestamp(summary["startTimeInSeconds"])
+            elif isinstance(summary.get("summary"), dict) and summary["summary"].get("startTimeInSeconds"):
+                start_time = datetime.utcfromtimestamp(summary["summary"]["startTimeInSeconds"])
+            elif "measurementTimeInSeconds" in summary:
+                start_time = datetime.utcfromtimestamp(summary["measurementTimeInSeconds"])
+
+            if not summary_id and start_time is not None:
+                summary_id = f"{summary_type}-{self.user_id}-{int(start_time.timestamp())}"
+
             if not summary_id:
                 continue
-
-            # Check if already exists
-            existing = self.db.query(GarminHealthData).filter(
-                GarminHealthData.summary_id == summary_id
-            ).first()
-
-            # Parse timestamps
-            start_time = None
-            if 'startTimeInSeconds' in summary:
-                start_time = datetime.utcfromtimestamp(summary['startTimeInSeconds'])
-            elif isinstance(summary.get('summary'), dict) and summary['summary'].get('startTimeInSeconds'):
-                start_time = datetime.utcfromtimestamp(summary['summary']['startTimeInSeconds'])
-            elif 'measurementTimeInSeconds' in summary:
-                start_time = datetime.utcfromtimestamp(summary['measurementTimeInSeconds'])
 
             if not start_time:
                 logger.warning(f"No timestamp found in summary {summary_id}")
                 continue
 
             data_json = json.dumps(summary)
+
+            existing = self.db.query(GarminHealthData).filter(
+                GarminHealthData.summary_id == summary_id
+            ).first()
 
             if existing:
                 # Update existing record

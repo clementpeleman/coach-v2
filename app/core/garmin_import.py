@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 import requests
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database.models import (
@@ -65,12 +66,18 @@ def replay_failed_webhooks(
 ) -> Dict[str, Any]:
     """Re-process stored partial/failed webhook payloads once a token is available again."""
     resolved_garmin_user_id = garmin_user_id or garmin_user_id_for_internal_user(db, user_id)
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
     query = db.query(GarminWebhookEvent).filter(
         GarminWebhookEvent.status.in_(["partial", "failed"]),
-        GarminWebhookEvent.created_at >= datetime.utcnow() - timedelta(hours=hours),
+        GarminWebhookEvent.created_at >= cutoff,
     )
     if resolved_garmin_user_id:
-        query = query.filter(GarminWebhookEvent.garmin_user_id == resolved_garmin_user_id)
+        query = query.filter(
+            or_(
+                GarminWebhookEvent.garmin_user_id == resolved_garmin_user_id,
+                GarminWebhookEvent.user_id == user_id,
+            )
+        )
     else:
         query = query.filter(GarminWebhookEvent.user_id == user_id)
 
@@ -81,21 +88,31 @@ def replay_failed_webhooks(
         "stored_items": 0,
         "still_failed": 0,
         "errors": [],
+        "event_ids": [],
     }
 
     for event in events:
+        result["event_ids"].append(event.id)
+        target_user_id = user_id
+        if event.garmin_user_id:
+            resolved = resolve_internal_user_for_garmin(db, str(event.garmin_user_id))
+            if resolved:
+                target_user_id = resolved
+
         try:
-            payload = json.loads(event.payload) if isinstance(event.payload, str) else event.payload
+            payload = _parse_webhook_payload(event.payload)
         except json.JSONDecodeError:
             result["still_failed"] += 1
             result["errors"].append(f"event {event.id}: invalid payload JSON")
             continue
 
         if event.source == "health":
-            stats = _replay_health_payload(db, user_id, payload)
+            stats = _replay_health_payload(db, target_user_id, payload)
         elif event.source == "activity":
-            stats = _replay_activity_payload(db, user_id, payload)
+            stats = _replay_activity_payload(db, target_user_id, payload)
         else:
+            result["errors"].append(f"event {event.id}: unsupported source {event.source}")
+            result["still_failed"] += 1
             continue
 
         result["stored_items"] += stats.get("stored_items", 0)
@@ -108,12 +125,23 @@ def replay_failed_webhooks(
             result["replayed"] += 1
             event.status = "processed"
             event.error = None
-        event.user_id = user_id
+        event.user_id = target_user_id
         event.updated_at = datetime.utcnow()
 
     if events:
         db.commit()
     return result
+
+
+def _parse_webhook_payload(raw_payload: Any) -> Dict[str, Any]:
+    payload = raw_payload
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    if not isinstance(payload, dict):
+        raise json.JSONDecodeError("Webhook payload is not an object", str(raw_payload), 0)
+    return payload
 
 
 def _replay_health_payload(db: Session, user_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -370,8 +398,8 @@ def build_import_message(
         )
     elif backfill_summary.get("all_duplicate") and activity_sessions <= 1:
         parts.append(
-            "Garmin stuurde geen historiek opnieuw (duplicate backfill). "
-            "Alleen activiteiten na je (her)koppeling komen automatisch binnen via webhooks."
+            "Garmin stuurde geen activiteiten-historiek opnieuw (duplicate backfill). "
+            "Nieuwe trainingen komen automatisch binnen via webhooks zodra je syncet met Garmin Connect."
         )
 
     if backfill_summary.get("requested_count", 0) > 0 and activity_sessions <= 1:
