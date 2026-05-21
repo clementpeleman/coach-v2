@@ -1,6 +1,7 @@
 """Garmin OAuth2 PKCE authentication service."""
 import base64
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta
 from typing import Dict, Tuple, Optional
@@ -12,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database.models import GarminToken, UserProfile
 from app.database.database import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class GarminOAuthService:
