@@ -246,11 +246,17 @@ async def web_me(user_id: int, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    from app.database.models import GarminToken
+
+    garmin_connected = (
+        db.query(GarminToken.id).filter(GarminToken.user_id == user_id).first() is not None
+    )
+
     return WebMeResponse(
         user_id=user.user_id,
         email=user.garmin_email,
         display_name=user.phone_number,
-        garmin_connected=bool(user.garmin_user_id),
+        garmin_connected=garmin_connected,
     )
 
 

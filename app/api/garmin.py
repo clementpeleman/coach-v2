@@ -134,7 +134,9 @@ def trigger_initial_import(
     from app.core.garmin_import import (
         activity_backfill_summary,
         build_import_message,
+        garmin_user_id_for_internal_user,
         pull_activity_history_direct,
+        replay_failed_webhooks,
     )
 
     oauth_service = GarminOAuthService()
@@ -158,6 +160,11 @@ def trigger_initial_import(
         )
 
     client = GarminAPIClient(db, user_id)
+    replay_result = replay_failed_webhooks(
+        db,
+        user_id,
+        garmin_user_id=garmin_user_id_for_internal_user(db, user_id),
+    )
     backfill_result = request_initial_backfill(client, perm_names)
     backfill_summary = activity_backfill_summary(backfill_result)
     import_status = build_import_status_payload(db, user_id, 30)
@@ -194,6 +201,7 @@ def trigger_initial_import(
         "backfill": backfill_result,
         "backfill_summary": backfill_summary,
         "direct_pull": direct_pull,
+        "webhook_replay": replay_result,
         "import_status": import_status.get("summary"),
         "stored_records": import_status.get("stored_records"),
         "webhook_urls": {
@@ -403,12 +411,12 @@ def _create_webhook_event(db: Session, source: str, payload: Dict) -> GarminWebh
         if isinstance(item, dict)
     ]
     garmin_user_id = next((item.get("userId") for item in items if item.get("userId")), None)
-    token = None
-    if garmin_user_id:
-        token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
+    from app.core.garmin_import import resolve_internal_user_for_garmin
+
+    resolved_user_id = resolve_internal_user_for_garmin(db, garmin_user_id)
 
     event = GarminWebhookEvent(
-        user_id=token.user_id if token else None,
+        user_id=resolved_user_id,
         garmin_user_id=garmin_user_id,
         source=source,
         summary_types=json.dumps(summary_types),
@@ -2622,23 +2630,22 @@ async def receive_health_webhook(
                 garmin_user_id = item.get('userId')
                 callback_url = item.get('callbackURL')
 
-                # Resolve internal user_id from garmin_user_id
-                token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
-                if not token:
+                from app.core.garmin_import import resolve_internal_user_for_garmin
+                from app.tools.garmin_client import write_health_data
+
+                user_id = resolve_internal_user_for_garmin(db, garmin_user_id)
+                if not user_id:
                     message = f"No token found for Garmin user {garmin_user_id}"
                     errors.append(message)
                     logger.warning(message)
                     continue
-
-                user_id = token.user_id
 
                 if not callback_url:
                     # This is a PUSH notification with data included
                     logger.info(f"PUSH notification for {summary_type}, user {garmin_user_id}")
                     # Store PUSH data directly
                     try:
-                        client = GarminAPIClient(db, user_id)
-                        client._store_health_data(summary_type, [item])
+                        write_health_data(db, user_id, summary_type, [item])
                         logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
                         message = f"Failed to store PUSH {summary_type}: {e}"
@@ -2662,7 +2669,7 @@ async def receive_health_webhook(
                         logger.info(f"Fetched {len(summaries)} {summary_type} summaries from PING")
 
                         # Store in database
-                        client._store_health_data(summary_type, summaries)
+                        write_health_data(db, user_id, summary_type, summaries)
                         logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
                         message = f"{summary_type} callback returned {response.status_code}: {response.text}"
@@ -2704,23 +2711,25 @@ async def receive_activity_webhook(
                 garmin_user_id = item.get('userId')
                 callback_url = item.get('callbackURL')
 
-                # Resolve internal user_id from garmin_user_id
-                token = db.query(GarminToken).filter(GarminToken.garmin_user_id == garmin_user_id).first()
-                if not token:
+                from app.core.garmin_import import resolve_internal_user_for_garmin
+                from app.tools.garmin_client import (
+                    write_activity_auxiliary_data,
+                    write_activity_data,
+                )
+
+                user_id = resolve_internal_user_for_garmin(db, garmin_user_id)
+                if not user_id:
                     message = f"No token found for Garmin user {garmin_user_id}"
                     errors.append(message)
                     logger.warning(message)
                     continue
-
-                user_id = token.user_id
 
                 if not callback_url:
                     # This is a PUSH notification with data included
                     logger.info(f"PUSH notification for {summary_type}, user {garmin_user_id}")
                     # Store PUSH activity data directly
                     try:
-                        client = GarminAPIClient(db, user_id)
-                        client._store_activity_data([item], summary_type)
+                        write_activity_data(db, user_id, [item], summary_type)
                         logger.info(f"Stored PUSH {summary_type} for user {user_id}")
                     except Exception as e:
                         message = f"Failed to store PUSH {summary_type}: {e}"
@@ -2736,7 +2745,7 @@ async def receive_activity_webhook(
                     client = GarminAPIClient(db, user_id)
                     if summary_type == "activityFiles":
                         # File pings contain useful metadata in the ping itself, then binary content at callbackURL.
-                        client._store_activity_auxiliary_data(summary_type, [item])
+                        write_activity_auxiliary_data(db, user_id, summary_type, [item])
                         file_response = requests.get(
                             callback_url,
                             headers=client._get_headers()
@@ -2764,7 +2773,7 @@ async def receive_activity_webhook(
                         logger.info(f"Fetched {len(summaries)} {summary_type} summaries from PING")
 
                         # Store in database
-                        client._store_activity_data(summaries, summary_type)
+                        write_activity_data(db, user_id, summaries, summary_type)
                         logger.info(f"Stored {len(summaries)} {summary_type} summaries for user {user_id}")
                     else:
                         message = f"{summary_type} callback returned {response.status_code}: {response.text}"

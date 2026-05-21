@@ -422,14 +422,10 @@ class GarminOAuthService:
 
     def delete_tokens(self, db: Session, user_id: int):
         """
-        Delete stored tokens for a user and clear Garmin link on profile.
+        Delete stored tokens for a user.
 
-        Args:
-            db: Database session
-            user_id: Internal user ID
+        Keep profile.garmin_user_id so late backfill webhooks can still be routed
+        to the correct account. Connected state is derived from GarminToken rows.
         """
-        profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-        if profile:
-            profile.garmin_user_id = None
         db.query(GarminToken).filter(GarminToken.user_id == user_id).delete()
         db.commit()

@@ -703,3 +703,37 @@ class GarminAPIClient:
                    f"{len(result['stress'])} stress records")
 
         return result
+
+
+def write_health_data(db: Session, user_id: int, summary_type: str, summaries: List[Dict]) -> None:
+    """Persist health webhook payloads without a live Garmin API token."""
+    writer = GarminAPIClient.__new__(GarminAPIClient)
+    writer.db = db
+    writer.user_id = user_id
+    writer._store_health_data(summary_type, summaries)
+
+
+def write_activity_data(
+    db: Session,
+    user_id: int,
+    summaries: List[Dict],
+    summary_type: str = "activities",
+) -> None:
+    """Persist activity webhook payloads without a live Garmin API token."""
+    writer = GarminAPIClient.__new__(GarminAPIClient)
+    writer.db = db
+    writer.user_id = user_id
+    writer._store_activity_data(summaries, summary_type)
+
+
+def write_activity_auxiliary_data(
+    db: Session,
+    user_id: int,
+    summary_type: str,
+    summaries: List[Dict],
+) -> None:
+    """Persist auxiliary activity webhook payloads without a live Garmin API token."""
+    writer = GarminAPIClient.__new__(GarminAPIClient)
+    writer.db = db
+    writer.user_id = user_id
+    writer._store_activity_auxiliary_data(summary_type, summaries)
