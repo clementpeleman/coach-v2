@@ -118,8 +118,8 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
               : 'Nog geen data in de database. Start een import — Garmin stuurt records via webhooks (enkele minuten).'}
             {hasData && activityCount <= 2 && (
               <span style={{ display: 'block', marginTop: 8, color: 'var(--warn)' }}>
-                Weinig historiek zichtbaar? Klik opnieuw importeren — de app haalt dan ook activiteiten direct op
-                als Garmin geen historische webhook opnieuw stuurt.
+                Weinig historiek zichtbaar? Klik opnieuw importeren en laat Garmin verbonden —
+                historiek komt via webhooks (2–15 min), niet via directe API-pull.
               </span>
             )}
           </p>

@@ -73,12 +73,14 @@ def test_build_import_message_for_duplicate_backfill():
     assert "duplicate backfill" in message
 
 
-def test_pull_activity_history_direct_counts_rows():
-    client = MagicMock()
-    client.get_activities.return_value = [{"summaryId": "a1"}, {"summaryId": "a2"}]
-    client.get_activity_details.return_value = [{"summaryId": "d1"}]
+def test_pull_activity_history_direct_is_unsupported():
+    result = pull_activity_history_direct(MagicMock(), days=30)
+    assert result["status"] == "unsupported"
+    assert result["activities"] == 0
 
-    result = pull_activity_history_direct(client, days=2)
-    assert result["activities"] == 4
-    assert result["activity_details"] == 2
-    assert client.get_activities.call_count == 2
+
+def test_resolve_internal_user_prefers_token():
+    token = MagicMock(user_id=42)
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [token, None]
+    assert resolve_internal_user_for_garmin(db, "garmin-123") == 42

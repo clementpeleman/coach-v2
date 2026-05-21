@@ -309,56 +309,28 @@ def split_upload_windows(start: datetime, end: datetime, window_days: int = 1) -
 
 def pull_activity_history_direct(client: "GarminAPIClient", days: int = 30) -> Dict[str, Any]:
     """
-    Pull activity summaries directly from Garmin when webhook backfill won't replay history.
+    Deprecated: Garmin Wellness API rejects ad-hoc REST pulls with HTTP 400.
 
-    Activity REST pulls are supported; health pulls are webhook/backfill-only in production.
+    Historical activity data must arrive via backfill + webhook callbacks only.
+    Kept for diagnostics; do not call in production import flows.
     """
-    end = datetime.utcnow()
-    start = end - timedelta(days=days)
-    result: Dict[str, Any] = {
+    return {
         "days": days,
         "activities": 0,
         "activity_details": 0,
         "windows": 0,
-        "errors": [],
-        "status": "ok",
+        "errors": ["Garmin staat geen directe REST-pull toe; gebruik backfill + webhooks."],
+        "status": "unsupported",
     }
-
-    for window_start, window_end in split_upload_windows(start, end, window_days=1):
-        upload_start = int(window_start.timestamp())
-        upload_end = int(window_end.timestamp())
-        result["windows"] += 1
-        try:
-            activities = client.get_activities(upload_start, upload_end, store=True)
-            if isinstance(activities, list):
-                result["activities"] += len(activities)
-        except Exception as exc:
-            message = f"activities {window_start.date()}..{window_end.date()}: {exc}"
-            result["errors"].append(message)
-            logger.warning("Direct activity pull failed: %s", message)
-
-        try:
-            details = client.get_activity_details(upload_start, upload_end, store=True)
-            if isinstance(details, list):
-                result["activity_details"] += len(details)
-        except Exception as exc:
-            message = f"activityDetails {window_start.date()}..{window_end.date()}: {exc}"
-            result["errors"].append(message)
-            logger.warning("Direct activity detail pull failed: %s", message)
-
-    if result["activities"] == 0 and result["errors"]:
-        result["status"] = "failed"
-    elif result["errors"]:
-        result["status"] = "partial"
-    return result
 
 
 def build_import_message(
     *,
     activity_sessions: int,
     backfill_summary: Dict[str, Any],
-    direct_pull: Optional[Dict[str, Any]],
-    migration: Optional[Dict[str, Any]],
+    webhook_replay: Optional[Dict[str, Any]] = None,
+    direct_pull: Optional[Dict[str, Any]] = None,
+    migration: Optional[Dict[str, Any]] = None,
     permissions_assumed: bool,
     capabilities: Dict[str, Any],
 ) -> str:
@@ -370,6 +342,15 @@ def build_import_message(
         parts.append(
             f"{moved} oudere activiteiten gekoppeld aan dit account na opnieuw verbinden."
         )
+
+    replay_stored = (webhook_replay or {}).get("stored_items", 0) or 0
+    replay_count = (webhook_replay or {}).get("replayed", 0) or 0
+    if replay_stored > 0:
+        parts.append(
+            f"{replay_stored} records hersteld uit eerder mislukte Garmin-webhooks."
+        )
+    elif replay_count > 0:
+        parts.append("Eerder mislukte webhooks opnieuw verwerkt.")
 
     if direct_pull and direct_pull.get("activities", 0) > 0:
         parts.append(
@@ -387,19 +368,16 @@ def build_import_message(
             "Historische activiteiten-import overgeslagen: ACTIVITY_EXPORT of "
             "HISTORICAL_DATA_EXPORT ontbreekt in Garmin-permissions."
         )
-    elif backfill_summary.get("all_duplicate") and activity_sessions <= 1 and not (
-        direct_pull and direct_pull.get("activities", 0) > 0
-    ):
+    elif backfill_summary.get("all_duplicate") and activity_sessions <= 1:
         parts.append(
             "Garmin stuurde geen historiek opnieuw (duplicate backfill). "
-            "Alleen activiteiten na je (her)koppeling komen automatisch binnen tenzij direct ophalen lukt."
+            "Alleen activiteiten na je (her)koppeling komen automatisch binnen via webhooks."
         )
 
-    if backfill_summary.get("requested_count", 0) > 0 and activity_sessions <= 1 and not (
-        direct_pull and direct_pull.get("activities", 0) > 0
-    ):
+    if backfill_summary.get("requested_count", 0) > 0 and activity_sessions <= 1:
         parts.append(
-            "Historiek is aangevraagd en komt meestal binnen 2–15 minuten via webhooks."
+            "Historiek is aangevraagd en komt meestal binnen 2–15 minuten via webhooks. "
+            "Laat Garmin verbonden tot alles binnen is."
         )
 
     if permissions_assumed:

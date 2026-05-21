@@ -97,8 +97,12 @@ class GarminAPIClient:
             # Check if it's a 400/403 error (likely permission/scope issue)
             if e.response.status_code in [400, 403]:
                 logger.error(f"Garmin API request failed with status {e.response.status_code}: {e}")
-                logger.error(f"This may indicate missing OAuth scopes. Required: HEALTH_EXPORT ACTIVITY_EXPORT")
-                logger.error(f"URL: {url}, Params: {params}")
+                logger.error(
+                    "Garmin Wellness API expects data via webhooks/backfill callbacks, "
+                    "not ad-hoc REST polling. URL: %s, Params: %s",
+                    url,
+                    params,
+                )
             else:
                 logger.error(f"Garmin API request failed: {e}")
             raise Exception(f"Garmin API error: {e}")
@@ -450,13 +454,8 @@ class GarminAPIClient:
         """
         Fetch activity summaries.
 
-        Args:
-            start_time: Start time in Unix timestamp (seconds)
-            end_time: End time in Unix timestamp (seconds)
-            store: Whether to store in database
-
-        Returns:
-            List of activity summary dicts
+        DEPRECATED for ad-hoc import: Garmin returns HTTP 400 on direct REST pulls.
+        Activity history must be requested via backfill and delivered through webhooks.
         """
         params = {
             "uploadStartTimeInSeconds": start_time,
@@ -479,13 +478,8 @@ class GarminAPIClient:
         """
         Fetch detailed activity summaries.
 
-        Args:
-            start_time: Start time in Unix timestamp (seconds)
-            end_time: End time in Unix timestamp (seconds)
-            store: Whether to store in database
-
-        Returns:
-            List of activity detail summary dicts
+        DEPRECATED for ad-hoc import: Garmin returns HTTP 400 on direct REST pulls.
+        Use backfill + activity webhooks instead.
         """
         params = {
             "uploadStartTimeInSeconds": start_time,

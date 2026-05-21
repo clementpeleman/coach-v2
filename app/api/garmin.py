@@ -135,7 +135,6 @@ def trigger_initial_import(
         activity_backfill_summary,
         build_import_message,
         garmin_user_id_for_internal_user,
-        pull_activity_history_direct,
         replay_failed_webhooks,
     )
 
@@ -170,23 +169,12 @@ def trigger_initial_import(
     import_status = build_import_status_payload(db, user_id, 30)
     activity_sessions = import_status.get("summary", {}).get("activity_sessions", 0) or 0
 
-    direct_pull = None
-    should_pull_direct = (
-        activity_sessions <= 1
-        or backfill_summary.get("all_duplicate")
-        or backfill_summary.get("skipped_permissions")
-    )
-    if should_pull_direct and extract_permission_names(perm_names).issuperset({"ACTIVITY_EXPORT"}):
-        direct_pull = pull_activity_history_direct(client, INITIAL_ACTIVITY_BACKFILL_DAYS)
-        import_status = build_import_status_payload(db, user_id, 30)
-        activity_sessions = import_status.get("summary", {}).get("activity_sessions", 0) or 0
-
     caps = build_garmin_capabilities(perm_names)
     base_url = settings.webapp_url.rstrip("/")
     message = build_import_message(
         activity_sessions=activity_sessions,
         backfill_summary=backfill_summary,
-        direct_pull=direct_pull,
+        webhook_replay=replay_result,
         migration=None,
         permissions_assumed=permissions_assumed,
         capabilities=caps,
@@ -200,7 +188,6 @@ def trigger_initial_import(
         "capabilities": caps,
         "backfill": backfill_result,
         "backfill_summary": backfill_summary,
-        "direct_pull": direct_pull,
         "webhook_replay": replay_result,
         "import_status": import_status.get("summary"),
         "stored_records": import_status.get("stored_records"),
