@@ -131,6 +131,12 @@ def trigger_initial_import(
     Request Garmin historical backfill after connect.
     Data arrives asynchronously via webhooks — must be configured in Garmin Developer Portal.
     """
+    from app.core.garmin_import import (
+        activity_backfill_summary,
+        build_import_message,
+        pull_activity_history_direct,
+    )
+
     oauth_service = GarminOAuthService()
     if not access_token:
         access_token = oauth_service.get_valid_access_token(db, user_id)
@@ -153,20 +159,41 @@ def trigger_initial_import(
 
     client = GarminAPIClient(db, user_id)
     backfill_result = request_initial_backfill(client, perm_names)
-    caps = build_garmin_capabilities(perm_names)
+    backfill_summary = activity_backfill_summary(backfill_result)
     import_status = build_import_status_payload(db, user_id, 30)
+    activity_sessions = import_status.get("summary", {}).get("activity_sessions", 0) or 0
+
+    direct_pull = None
+    should_pull_direct = (
+        activity_sessions <= 1
+        or backfill_summary.get("all_duplicate")
+        or backfill_summary.get("skipped_permissions")
+    )
+    if should_pull_direct and extract_permission_names(perm_names).issuperset({"ACTIVITY_EXPORT"}):
+        direct_pull = pull_activity_history_direct(client, INITIAL_ACTIVITY_BACKFILL_DAYS)
+        import_status = build_import_status_payload(db, user_id, 30)
+        activity_sessions = import_status.get("summary", {}).get("activity_sessions", 0) or 0
+
+    caps = build_garmin_capabilities(perm_names)
     base_url = settings.webapp_url.rstrip("/")
+    message = build_import_message(
+        activity_sessions=activity_sessions,
+        backfill_summary=backfill_summary,
+        direct_pull=direct_pull,
+        migration=None,
+        permissions_assumed=permissions_assumed,
+        capabilities=caps,
+    )
 
     return {
         "status": "requested",
-        "message": (
-            "Import aangevraagd bij Garmin. Activiteiten en gezondheid komen binnen via webhooks "
-            "(meestal binnen 2–15 minuten)."
-        ),
+        "message": message,
         "permissions": perm_names,
         "permissions_assumed": permissions_assumed,
         "capabilities": caps,
         "backfill": backfill_result,
+        "backfill_summary": backfill_summary,
+        "direct_pull": direct_pull,
         "import_status": import_status.get("summary"),
         "stored_records": import_status.get("stored_records"),
         "webhook_urls": {

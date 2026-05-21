@@ -68,9 +68,12 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
     setSyncMsg(null);
     try {
       const res = await window.FC_API.requestInitialGarminSync(userId);
-      setSyncMsg(res.message || 'Import gestart. Even geduld…');
+      const sessions = res?.import_status?.activity_sessions;
+      const extra = sessions != null ? ` (${sessions} activiteiten in de laatste 30 dagen)` : '';
+      setSyncMsg((res.message || 'Import gestart. Even geduld…') + extra);
       try { window.localStorage.setItem(`fc_initial_sync_${userId}`, 'done'); } catch (_) {}
       setTimeout(loadImportStatus, 3000);
+      setTimeout(loadImportStatus, 15000);
     } catch (e) {
       setSyncMsg(FCU.formatApiError(e.message));
     } finally {
@@ -113,6 +116,12 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
             {hasData
               ? `${activityCount} activiteiten en ${healthCount} gezondheidsrecords in de laatste 30 dagen.`
               : 'Nog geen data in de database. Start een import — Garmin stuurt records via webhooks (enkele minuten).'}
+            {hasData && activityCount <= 2 && (
+              <span style={{ display: 'block', marginTop: 8, color: 'var(--warn)' }}>
+                Weinig historiek zichtbaar? Klik opnieuw importeren — de app haalt dan ook activiteiten direct op
+                als Garmin geen historische webhook opnieuw stuurt.
+              </span>
+            )}
           </p>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button className="btn accent" onClick={startDataImport} disabled={syncing}>

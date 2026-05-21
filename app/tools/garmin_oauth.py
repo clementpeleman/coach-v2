@@ -318,8 +318,16 @@ class GarminOAuthService:
             GarminToken.garmin_user_id == garmin_user_id
         ).first()
 
+        previous_user_id = None
+        if token_for_garmin and token_for_garmin.user_id != user_id:
+            previous_user_id = token_for_garmin.user_id
+        elif token_for_user and token_for_user.garmin_user_id not in (None, garmin_user_id):
+            previous_user_id = token_for_user.user_id
+
         # If both exist but are different rows, keep the Garmin-linked row and remove the duplicate.
         if token_for_user and token_for_garmin and token_for_user.id != token_for_garmin.id:
+            if token_for_user.user_id != token_for_garmin.user_id and previous_user_id is None:
+                previous_user_id = token_for_user.user_id
             db.delete(token_for_user)
             db.flush()
             garmin_token = token_for_garmin
@@ -351,6 +359,25 @@ class GarminOAuthService:
 
         db.commit()
         db.refresh(garmin_token)
+
+        try:
+            from app.core.garmin_import import migrate_garmin_account_data
+
+            migration = migrate_garmin_account_data(
+                db,
+                garmin_user_id=garmin_user_id,
+                target_user_id=user_id,
+                previous_user_id=previous_user_id,
+            )
+            if migration.get("source_user_ids"):
+                logger.info(
+                    "Re-linked Garmin account %s to user %s; migrated %s",
+                    garmin_user_id,
+                    user_id,
+                    migration,
+                )
+        except Exception as migrate_exc:
+            logger.warning("Garmin data migration after OAuth failed: %s", migrate_exc)
 
         return garmin_token
 
