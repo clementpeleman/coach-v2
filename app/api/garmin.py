@@ -2891,7 +2891,14 @@ async def receive_deregistration_webhook(
                     errors.append(f"No token found for Garmin user {garmin_user_id}")
 
         db.commit()
-        _finish_webhook_event(db, event, errors)
+        if errors:
+            event.status = "partial"
+            event.error = "\n".join(errors)
+        else:
+            event.status = "processed"
+            event.error = None
+        event.updated_at = datetime.utcnow()
+        db.commit()
         return {"status": "received"}
 
     except Exception as e:

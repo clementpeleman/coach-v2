@@ -56,6 +56,9 @@ def garmin_user_id_for_internal_user(db: Session, user_id: int) -> Optional[str]
     return None
 
 
+REPLAYABLE_WEBHOOK_SOURCES = ("health", "activity")
+
+
 def replay_failed_webhooks(
     db: Session,
     user_id: int,
@@ -69,6 +72,7 @@ def replay_failed_webhooks(
     cutoff = datetime.utcnow() - timedelta(hours=hours)
     query = db.query(GarminWebhookEvent).filter(
         GarminWebhookEvent.status.in_(["partial", "failed"]),
+        GarminWebhookEvent.source.in_(REPLAYABLE_WEBHOOK_SOURCES),
         GarminWebhookEvent.created_at >= cutoff,
     )
     if resolved_garmin_user_id:
@@ -477,18 +481,25 @@ def build_import_log(
         log.append(_log_entry("ok", "permissions", "Klaar voor activiteiten-backfill (ACTIVITY + HISTORICAL)."))
 
     replay = replay_result or {}
-    replay_line = (
-        f"Webhook replay: {replay.get('attempted', 0)} geprobeerd, "
-        f"{replay.get('replayed', 0)} ok, {replay.get('stored_items', 0)} records, "
-        f"{replay.get('still_failed', 0)} mislukt"
-    )
-    if replay.get("event_ids"):
-        replay_line += f" (events {replay['event_ids']})"
-    log.append(_log_entry(
-        "ok" if replay.get("still_failed", 0) == 0 else "warn",
-        "replay",
-        replay_line,
-    ))
+    if replay.get("attempted", 0) == 0:
+        log.append(_log_entry(
+            "ok",
+            "replay",
+            "Geen mislukte activity/health webhooks om opnieuw te verwerken.",
+        ))
+    else:
+        replay_line = (
+            f"Webhook replay: {replay.get('attempted', 0)} geprobeerd, "
+            f"{replay.get('replayed', 0)} ok, {replay.get('stored_items', 0)} records, "
+            f"{replay.get('still_failed', 0)} mislukt"
+        )
+        if replay.get("event_ids"):
+            replay_line += f" (events {replay['event_ids']})"
+        log.append(_log_entry(
+            "ok" if replay.get("still_failed", 0) == 0 else "warn",
+            "replay",
+            replay_line,
+        ))
     for err in (replay.get("errors") or [])[:5]:
         log.append(_log_entry("warn", "replay", str(err)))
 
