@@ -1,4 +1,4 @@
-// Onboarding — Garmin-first.
+// Onboarding - Garmin-first.
 const { useState: useStateO } = React;
 const FCU = window.FC_UTILS;
 

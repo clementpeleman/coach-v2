@@ -1,4 +1,4 @@
-// Activities — list + trends, mirrors webapp/src/app/activities/page.tsx data shapes.
+// Activities - list + trends, mirrors webapp/src/app/activities/page.tsx data shapes.
 const { useState: useStateA, useMemo: useMemoA } = React;
 const FCUA = window.FC_UTILS;
 
@@ -43,6 +43,13 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
   const filtered = useMemoA(() => {
     return allActivities.filter(a => sportFilter === 'ALL' || canonicalActivityType(a) === sportFilter);
   }, [sportFilter, allActivities]);
+  const openWorkout = () => onNavigate('workout');
+  const onRowKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openWorkout();
+    }
+  };
 
   const totals = useMemoA(() => {
     const acc = { sessions: 0, distance: 0, duration: 0, hr: 0, hrn: 0, runs: 0, rides: 0, longest: 0, maxHr: 0 };
@@ -191,7 +198,10 @@ function ActivitiesScreen({ onNavigate, apiStatus, userId }) {
               </tr>
             )}
             {filtered.map((a) => (
-              <tr key={a.id} className="hover" onClick={() => onNavigate('workout')}>
+              <tr key={a.id} className="hover" role="button" tabIndex={0}
+                aria-label={`Open training op basis van ${a.activity_name || FCUA.sportLabel(a.activity_type)}`}
+                onClick={openWorkout}
+                onKeyDown={onRowKeyDown}>
                 <td style={{ paddingLeft: 24 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 28, height: 28, borderRadius: 8,
@@ -335,7 +345,7 @@ function TrendCard({ weeklyTrend, activities, period, sportFilter, sportBaseline
                     alignItems: 'start', marginBottom: 24 }}>
         <div>
           <span className="label">Trendinzicht</span>
-          <h2 style={{ marginTop: 10, color: '#fff' }}>{headline}</h2>
+          <h2 style={{ marginTop: 10, color: 'var(--text-on-dark)' }}>{headline}</h2>
         </div>
         <span className="tag" style={{ background: 'oklch(35% 0.005 100)',
           color: 'oklch(85% 0.005 100)' }}>{period}d</span>
@@ -355,7 +365,7 @@ function TrendCard({ weeklyTrend, activities, period, sportFilter, sportBaseline
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <div className="mono" style={{ fontSize: 36, fontWeight: 500,
-          color: '#fff', letterSpacing: '-.02em' }}>
+          color: 'var(--text-on-dark)', letterSpacing: '-.02em' }}>
           {loadRatio ? loadRatio.toFixed(2) : '–'}
         </div>
         <div style={{ color: 'oklch(78% 0.16 60)', fontSize: 13 }}>
@@ -405,7 +415,7 @@ function DeltaStat({ label, delta, sub, trend }) {
         {label}
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 6 }}>
-        <span className="mono" style={{ fontSize: 24, fontWeight: 500, color: '#fff',
+        <span className="mono" style={{ fontSize: 24, fontWeight: 500, color: 'var(--text-on-dark)',
           letterSpacing: '-.02em' }}>{delta}</span>
         <span className="mono" style={{ color, fontSize: 14 }}>{arrow}</span>
       </div>

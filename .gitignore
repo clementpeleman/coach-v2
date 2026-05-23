@@ -19,3 +19,7 @@ example/
 bot.log
 .bot.pid
 *.log
+
+# Frontend build artifacts
+node_modules/
+dist/

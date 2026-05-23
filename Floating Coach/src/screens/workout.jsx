@@ -309,7 +309,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               Trainingsplan
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <span className="mono" style={{ fontSize: 56, color: '#fff', fontWeight: 500,
+              <span className="mono" style={{ fontSize: 56, color: 'var(--text-on-dark)', fontWeight: 500,
                 letterSpacing: '-.03em', fontVariantNumeric: 'tabular-nums' }}>
                 {formatTime(totalSec)}
               </span>
@@ -327,7 +327,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               {SPORT_OPTIONS.map((sport) => (
                 <button key={sport.key} onClick={() => { setSportTouched(true); setSportType(sport.key); }}
                   className={sportType === sport.key ? 'btn accent' : 'btn ghost'}
-                  style={{ justifyContent: 'center', color: sportType === sport.key ? undefined : '#fff',
+                  style={{ justifyContent: 'center', color: sportType === sport.key ? undefined : 'var(--text-on-dark)',
                     borderColor: sportType === sport.key ? undefined : 'oklch(35% 0.005 100)',
                     padding: '8px 6px', fontSize: 11, minWidth: 0 }}>
                   {sport.shortLabel}
@@ -341,7 +341,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               ].map(([mode, label]) => (
                 <button key={mode} onClick={() => setTargetMode(mode)}
                   className={targetMode === mode ? 'btn accent' : 'btn ghost'}
-                  style={{ justifyContent: 'center', color: targetMode === mode ? undefined : '#fff',
+                  style={{ justifyContent: 'center', color: targetMode === mode ? undefined : 'var(--text-on-dark)',
                     borderColor: targetMode === mode ? undefined : 'oklch(35% 0.005 100)' }}>
                   {label}
                 </button>
@@ -371,7 +371,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               Belangrijkste doel
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 8 }}>
-              <span style={{ fontSize: 36, fontWeight: 600, color: '#fff',
+              <span style={{ fontSize: 36, fontWeight: 600, color: 'var(--text-on-dark)',
                 letterSpacing: '-.02em' }}>{mainTarget?.label}</span>
               <span className="tag accent">{mainTarget?.zone}</span>
             </div>
@@ -406,7 +406,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
           <div style={{ textAlign: 'center' }}>
             <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
               textTransform: 'uppercase', letterSpacing: '.16em' }}>{targetLabel}</div>
-            <div className="mono" style={{ fontSize: 42, color: '#fff', fontWeight: 500,
+            <div className="mono" style={{ fontSize: 42, color: 'var(--text-on-dark)', fontWeight: 500,
               letterSpacing: '-.03em', marginTop: 8 }}>{targetValue || '–'}</div>
             <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
               textTransform: 'uppercase', letterSpacing: '.16em', marginTop: 8 }}>
@@ -421,7 +421,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
             textTransform: 'uppercase', letterSpacing: '.16em', marginBottom: 10 }}>
             Sessie tijdlijn
           </div>
-          <div style={{ display: 'flex', gap: 3, height: 48 }}>
+          <div style={{ display: 'flex', gap: 3, height: 48, overflowX: 'auto', paddingBottom: 2 }}>
             {blocks.map((b, i) => (
               <button key={b.id || i} title={`${b.label} · ${Math.round(b.sec/60)} min`}
                 onClick={() => setSelectedBlockIndex(i)}
@@ -431,19 +431,19 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                   borderRadius: 3,
                   position: 'relative',
                   opacity: selectedBlockIndex === i ? 1 : .72,
-                  border: selectedBlockIndex === i ? '2px solid #fff' : '1px solid rgba(255,255,255,.12)',
+                  border: selectedBlockIndex === i ? '2px solid var(--text-on-dark)' : '1px solid rgba(255,255,255,.12)',
                   boxShadow: selectedBlockIndex === i ? '0 0 0 3px rgba(191,255,54,.22)' : 'none',
                   cursor: 'pointer',
-                  minWidth: 10,
+                  minWidth: 44,
                 }}>
               </button>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
+          <div style={{ display: 'flex', gap: 3, marginTop: 6, overflowX: 'auto', paddingBottom: 2 }}>
             {blocks.map((b, i) => (
               <button key={b.id || i} onClick={() => setSelectedBlockIndex(i)}
                 style={{ flex: b.sec / totalSec, textAlign: 'center', background: 'transparent',
-                  border: 0, padding: 0, cursor: 'pointer' }}>
+                  border: 0, padding: 0, cursor: 'pointer', minWidth: 44 }}>
                 {b.sec / totalSec > 0.04 && (
                   <span className="mono" style={{ fontSize: 9, color: 'oklch(72% 0.01 100)',
                     textTransform: 'uppercase', letterSpacing: '.1em' }}>
@@ -480,14 +480,14 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                   boxSizing: 'border-box',
                   border: '1px solid oklch(36% 0.005 100)',
                   background: 'oklch(18% 0.005 100)',
-                  color: '#fff',
+                  color: 'var(--text-on-dark)',
                   borderRadius: 10,
                   padding: '11px 12px',
                   fontSize: 15,
                 }} />
               <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 8, marginTop: 10 }}>
                 <button className="btn ghost" onClick={() => adjustSelectedDuration(-1)}
-                  style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center' }}>-1</button>
+                  style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center' }}>-1</button>
                 <label>
                   <span className="mono" style={{ display: 'block', fontSize: 9, color: 'oklch(70% 0.01 100)',
                     textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
@@ -500,7 +500,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                       boxSizing: 'border-box',
                       border: '1px solid oklch(36% 0.005 100)',
                       background: 'oklch(18% 0.005 100)',
-                      color: '#fff',
+                      color: 'var(--text-on-dark)',
                       borderRadius: 10,
                       padding: '10px 12px',
                       fontSize: 15,
@@ -508,7 +508,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                     }} />
                 </label>
                 <button className="btn ghost" onClick={() => adjustSelectedDuration(1)}
-                  style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center' }}>+1</button>
+                  style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center' }}>+1</button>
               </div>
             </div>
 
@@ -521,7 +521,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                 {['Z1', 'Z2', 'Z3', 'Z4', 'Z5'].map((zone) => (
                   <button key={zone} onClick={() => updateSelectedBlock({ zone, color: zoneColor(zone) })}
                     className={selectedBlock.zone === zone ? 'btn accent' : 'btn ghost'}
-                    style={{ justifyContent: 'center', color: selectedBlock.zone === zone ? undefined : '#fff',
+                    style={{ justifyContent: 'center', color: selectedBlock.zone === zone ? undefined : 'var(--text-on-dark)',
                       borderColor: selectedBlock.zone === zone ? undefined : 'oklch(35% 0.005 100)',
                       padding: '9px 6px' }}>
                     {zone}
@@ -547,7 +547,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                       placeholder={metricPlaceholder(sportType, 'max')}
                       style={metricInputStyle()} />
                     <span className="mono" style={{
-                      color: '#fff',
+                      color: 'var(--text-on-dark)',
                       border: '1px solid oklch(36% 0.005 100)',
                       borderRadius: 999,
                       padding: '7px 9px',
@@ -571,7 +571,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                       boxSizing: 'border-box',
                       border: '1px solid oklch(36% 0.005 100)',
                       background: 'oklch(18% 0.005 100)',
-                      color: '#fff',
+                      color: 'var(--text-on-dark)',
                       borderRadius: 10,
                       padding: '10px 12px',
                       fontSize: 14,
@@ -595,7 +595,7 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
               </button>
               <button className="btn ghost" onClick={resetBlocks}
                 style={{ width: '100%', justifyContent: 'center', marginTop: 8,
-                  color: '#fff', borderColor: 'oklch(35% 0.005 100)' }}>
+                  color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)' }}>
                 Reset blokken
               </button>
               <p style={{ fontSize: 13, lineHeight: 1.45, color: 'oklch(78% 0.01 100)', margin: '10px 0 0' }}>
@@ -625,10 +625,8 @@ function WorkoutScreen({ recoveryScore, onNavigate, apiStatus, userId, trainingP
                 gridTemplateColumns: '34px 1fr auto auto',
                 gap: 14, alignItems: 'center',
                 padding: '14px 10px',
-                borderBottom: i < blocks.length - 1 ? '1px solid var(--line)' : 'none',
-                borderTop: 'none',
-                borderLeft: selectedBlockIndex === i ? '3px solid var(--accent)' : '3px solid transparent',
-                borderRight: 'none',
+                border: selectedBlockIndex === i ? '1px solid var(--accent)' : '1px solid transparent',
+                borderBottomColor: i < blocks.length - 1 ? 'var(--line)' : 'transparent',
                 background: selectedBlockIndex === i ? 'var(--bg-soft)' : 'transparent',
                 borderRadius: selectedBlockIndex === i ? 10 : 0,
                 textAlign: 'left',
@@ -767,11 +765,11 @@ function SmallStat({ label, value, unit }) {
 function metricInputStyle() {
   return {
     width: '100%',
-    minWidth: 0,
+    minWidth: 64,
     boxSizing: 'border-box',
     border: '1px solid oklch(36% 0.005 100)',
     background: 'oklch(18% 0.005 100)',
-    color: '#fff',
+    color: 'var(--text-on-dark)',
     borderRadius: 10,
     padding: '10px 9px',
     fontSize: 14,

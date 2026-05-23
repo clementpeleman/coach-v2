@@ -1,4 +1,4 @@
-// Session — user_id management, mirrors webapp/src/lib/session.ts.
+// Session - user_id management, mirrors webapp/src/lib/session.ts.
 (function () {
   const KEY = 'sportsHubUserId';
 

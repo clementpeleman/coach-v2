@@ -1,4 +1,4 @@
-// Dashboard — today overview + hero workout generator.
+// Dashboard - today overview + hero workout generator.
 const { useEffect: useEffectD, useState: useStateD } = React;
 const FC = window.FC_UTILS;
 
@@ -76,7 +76,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
         }}>
           <span className="tag accent">Demo</span>
           <div style={{ flex: 1, fontSize: 13, color: 'var(--ink-2)' }}>
-            <b>Demo-data</b> — verbind Garmin voor live inzichten.
+            <b>Demo-data</b> - verbind Garmin voor live inzichten.
           </div>
           <button className="btn accent" style={{ padding: '8px 14px', fontSize: 12 }}
             onClick={() => onNavigate('profiel')}>
@@ -104,7 +104,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
         </div>
       </div>
 
-      {/* Live/demo banner — surfaces when API errored */}
+      {/* Live/demo banner - surfaces when API errored */}
       {activitiesQuery.error && (
         <div className="card" style={{ background: 'oklch(96% 0.04 60)', borderColor: 'oklch(85% 0.08 60)',
           padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -125,7 +125,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
 
       {/* Metric strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
-        <MetricStat label="Recovery" value={scoreNum ?? '—'} unit={scoreNum != null ? '/6' : ''} ring={scoreNum != null ? ringPct : undefined} ringClass={ringClass} />
+        <MetricStat label="Recovery" value={scoreNum ?? '-'} unit={scoreNum != null ? '/6' : ''} ring={scoreNum != null ? ringPct : undefined} ringClass={ringClass} />
         <MetricStat label="Body Battery" value={R.bodyBatteryCurrent ?? R.bodyBattery ?? '–'} unit={(R.bodyBatteryCurrent ?? R.bodyBattery) == null ? '' : "%"} sub={R.avgStress != null ? `Stress ${R.avgStress} · ${FC.stressLabel(R.avgStress)}` : (R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen data')} />
         <MetricStat label="Sleep score" value={R.sleepScore ?? '–'} unit="" sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u slaap` : 'Geen slaapdata'} />
       </div>
@@ -170,7 +170,7 @@ function HeroWorkout({ rec, draftWorkout, score, weather, onNavigate }) {
             </span>
           </div>
           <h2 style={{ fontSize: 48, fontWeight: 600, letterSpacing: '-.025em',
-                       lineHeight: 1, color: '#fff', marginBottom: 12 }}>
+                       lineHeight: 1, color: 'var(--text-on-dark)', marginBottom: 12 }}>
             {rec.dutch}
           </h2>
           <p style={{ fontSize: 16, color: 'oklch(78% 0.01 100)', maxWidth: 460,
@@ -189,13 +189,13 @@ function HeroWorkout({ rec, draftWorkout, score, weather, onNavigate }) {
               Start training <span className="arrow">→</span>
             </button>
             <button className="btn ghost" onClick={() => onNavigate('workout')}
-                    style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)' }}>
+                    style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)' }}>
               Bekijk plan
             </button>
             <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
               <div className="mono" style={{ fontSize: 10, color: 'oklch(70% 0.01 100)',
                 textTransform: 'uppercase', letterSpacing: '.14em' }}>Geschatte duur</div>
-              <div className="mono" style={{ fontSize: 24, fontWeight: 500, color: '#fff',
+              <div className="mono" style={{ fontSize: 24, fontWeight: 500, color: 'var(--text-on-dark)',
                 marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
                 {rec.duration} min
               </div>
@@ -214,7 +214,7 @@ function HeroWorkout({ rec, draftWorkout, score, weather, onNavigate }) {
                                 strokeDashoffset: 2 * Math.PI * 80 * (1 - ringPct) }} />
             </svg>
             <div className="ring-center">
-              <div className="ring-num" style={{ color: '#fff', fontSize: 56 }}>
+              <div className="ring-num" style={{ color: 'var(--text-on-dark)', fontSize: 56 }}>
                 {score}<em>/6</em>
               </div>
               <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
@@ -242,7 +242,7 @@ function HeroWorkout({ rec, draftWorkout, score, weather, onNavigate }) {
 
 function WorkoutStrip({ type, draftWorkout }) {
   // Stylised structure block to make the workout tangible.
-  // Just visual rhythm — not exact zones.
+  // Just visual rhythm - not exact zones.
   const draftBlocks = Array.isArray(draftWorkout?.blocks) && draftWorkout.blocks.length
     ? draftWorkout.blocks.map((block) => [block.short || block.label || 'Blok', Math.max(0.5, (block.sec || 0) / 60), zoneNumber(block.zone)])
     : null;
@@ -455,6 +455,13 @@ function CoachInsight({ onNavigate, analysis, allowDemo }) {
 function RecentActivities({ onNavigate, activities, source }) {
   const D = window.FC_DATA;
   const list = (activities && activities.length) ? activities : D.activities;
+  const openWorkout = () => onNavigate('workout');
+  const onRowKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openWorkout();
+    }
+  };
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between',
@@ -479,7 +486,10 @@ function RecentActivities({ onNavigate, activities, source }) {
         </thead>
         <tbody>
           {list.slice(0, 5).map((a) => (
-            <tr key={a.id} className="hover" onClick={() => onNavigate('workout')}>
+            <tr key={a.id} className="hover" role="button" tabIndex={0}
+              aria-label={`Open training op basis van ${a.activity_name || FC.sportLabel(a.activity_type)}`}
+              onClick={openWorkout}
+              onKeyDown={onRowKeyDown}>
               <td style={{ paddingLeft: 24 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{ width: 28, height: 28, borderRadius: 8,

@@ -23,7 +23,7 @@ window.FC_DATA = (() => {
     stressTrend: [42, 38, 35, 40, 33, 30, 31],
   };
 
-  // Demo recommendations — mirrors backend workout_type_from_readiness (score 5 → VO2MAX, SPRINT only with history)
+  // Demo recommendations - mirrors backend workout_type_from_readiness (score 5 → VO2MAX, SPRINT only with history)
   const recommendedByRecovery = {
     0: { type: 'HERSTEL', dutch: 'Herstel', sport: 'Wandelen', duration: 40, intensity: 'Zeer laag', desc: 'Korte herstelwandeling. Hartslag onder 120.', color: 'rest' },
     1: { type: 'HERSTEL', dutch: 'Herstel', sport: 'Wandelen', duration: 45, intensity: 'Zeer laag', desc: 'Actief herstel. Body Battery aanvullen.', color: 'rest' },
@@ -34,7 +34,7 @@ window.FC_DATA = (() => {
     6: { type: 'SPRINT', dutch: 'Sprints', sport: 'Hardlopen', duration: 35, intensity: 'Maximaal', desc: '10× 30s all-out. Max kracht en explosiviteit.', color: 'sprint' },
   };
 
-  // Recent activities — uses GarminActivity shape
+  // Recent activities - uses GarminActivity shape
   const activities = [
     { id: 8412, activity_type: 'RUNNING',    activity_name: 'Ochtendloop Schelde',          start_time: '2026-05-13T07:14:00', duration_seconds: 3120, distance_meters: 9420,  average_heart_rate: 148, max_heart_rate: 172, calories: 612, manual: false },
     { id: 8408, activity_type: 'CYCLING',    activity_name: 'Pendel naar werk',              start_time: '2026-05-12T08:02:00', duration_seconds: 1680, distance_meters: 13400, average_heart_rate: 121, max_heart_rate: 154, calories: 244, manual: false },
@@ -48,7 +48,7 @@ window.FC_DATA = (() => {
     { id: 8358, activity_type: 'CYCLING',    activity_name: 'Lange duurrit Kalmthout',       start_time: '2026-05-03T09:00:00', duration_seconds: 9420, distance_meters: 78400, average_heart_rate: 142, max_heart_rate: 171, calories: 1418, manual: false },
   ];
 
-  // Weekly trend — last 6 weeks
+  // Weekly trend - last 6 weeks
   const weeklyTrend = [
     { week_start: '2026-04-06', sessions: 3, distance_km: 28.4, duration_hours: 3.1, average_heart_rate: 142 },
     { week_start: '2026-04-13', sessions: 4, distance_km: 41.2, duration_hours: 4.6, average_heart_rate: 145 },
@@ -85,7 +85,7 @@ window.FC_DATA = (() => {
 
   // Chat seed messages
   const chatSeed = [
-    { role: 'assistant', content: 'Hey, je herstelscore is <b>4/6</b>. Goede dag voor een tempotraining — wil je dat ik een sessie van 55 min klaarmaak?', time: '08:12', source: 'seed' },
+    { role: 'assistant', content: 'Hey, je herstelscore is <b>4/6</b>. Goede dag voor een tempotraining - wil je dat ik een sessie van 55 min klaarmaak?', time: '08:12', source: 'seed' },
   ];
 
   // Floating coach quick suggestions

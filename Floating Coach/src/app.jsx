@@ -1,8 +1,8 @@
-// App shell — sidebar nav, screen router, floating orb.
+// App shell - sidebar nav, screen router, floating orb.
 const { useState: useStateApp, useEffect: useEffectApp } = React;
 
-const ACCENT_HEX   = '#caff3b';
-const ACCENT_INK   = '#0d0e0b';
+const ACCENT_OKLCH = 'oklch(92% 0.20 125)'; // acid lime
+const ACCENT_INK   = 'oklch(16% 0.008 115)';
 const DEFAULT_RECOVERY = 4;
 
 function App() {
@@ -217,7 +217,7 @@ function App() {
 
   // Apply accent token once.
   useEffectApp(() => {
-    document.documentElement.style.setProperty('--accent', ACCENT_HEX);
+    document.documentElement.style.setProperty('--accent', ACCENT_OKLCH);
     document.documentElement.style.setProperty('--accent-ink', ACCENT_INK);
   }, []);
 
@@ -341,17 +341,19 @@ function App() {
           </div>
 
           {Object.entries(SCREENS).map(([k, s]) => (
-            <div key={k}
+            <button key={k}
+              type="button"
               className={`rail-item tab-nav ${screen === k ? 'active' : ''}`}
+              aria-current={screen === k ? 'page' : undefined}
               onClick={() => setScreen(k)}>
               <span className="ico">{s.ico}</span>
               <span>{s.label}</span>
-            </div>
+            </button>
           ))}
 
           <div className="spacer"></div>
 
-          <div className="rail-status" style={{ padding: '10px 12px', marginBottom: 10,
+          <div className="rail-status status-card" style={{ padding: '10px 12px', marginBottom: 10,
                         background: 'var(--surface)', border: '1px solid var(--line)',
                         borderRadius: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -386,7 +388,7 @@ function App() {
         </main>
       </div>
 
-      {/* Floating coach — enige coach-ingang */}
+      {/* Floating coach - enige coach-ingang */}
       <window.CoachOrb recoveryScore={recoveryScore}
                           recoveryData={recoveryMetrics}
                           weather={weather}

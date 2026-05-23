@@ -139,7 +139,7 @@ export default function DashboardPage() {
           />
           <MetricCard
             label="Gem. hartslag"
-            value={week.average_heart_rate != null ? `${week.average_heart_rate} bpm` : "—"}
+            value={week.average_heart_rate != null ? `${week.average_heart_rate} bpm` : "-"}
             icon={<Heart className="h-4 w-4" />}
             trend={deltas?.avg_heart_rate_delta != null ? (deltas.avg_heart_rate_delta > 2 ? "up" : deltas.avg_heart_rate_delta < -2 ? "down" : "neutral") : undefined}
             trendLabel={deltas?.avg_heart_rate_delta != null ? `${deltas.avg_heart_rate_delta > 0 ? "+" : ""}${deltas.avg_heart_rate_delta} bpm` : undefined}
@@ -173,8 +173,8 @@ export default function DashboardPage() {
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <MiniStat label="Afstand" value={`${((lastActivity.distance_meters ?? 0) / 1000).toFixed(1)} km`} />
             <MiniStat label="Duur" value={`${Math.round((lastActivity.duration_seconds ?? 0) / 60)} min`} />
-            <MiniStat label="Gem. HR" value={lastActivity.average_heart_rate ? `${lastActivity.average_heart_rate} bpm` : "—"} />
-            <MiniStat label="Calorieën" value={lastActivity.calories ? `${lastActivity.calories} kcal` : "—"} />
+            <MiniStat label="Gem. HR" value={lastActivity.average_heart_rate ? `${lastActivity.average_heart_rate} bpm` : "-"} />
+            <MiniStat label="Calorieën" value={lastActivity.calories ? `${lastActivity.calories} kcal` : "-"} />
           </div>
         </div>
       )}

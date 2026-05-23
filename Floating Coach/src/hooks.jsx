@@ -11,7 +11,7 @@ function useSession() {
   };
 }
 
-// ---- useApiStatus — polls /health, exposes online/offline/checking ----
+// ---- useApiStatus - polls /health, exposes online/offline/checking ----
 // status: 'checking' | 'online' | 'offline'
 function useApiStatus() {
   const [status, setStatus] = useStateH('checking');
@@ -124,7 +124,7 @@ function writeLiveCache(key, data, updatedAt) {
   } catch (_) {}
 }
 
-// ---- ConnectionPill — small status indicator ----
+// ---- ConnectionPill - small status indicator ----
 function ConnectionPill({ status, source, onClick }) {
   // status: API health; source: where the current data came from (live/demo)
   const isLive = status === 'online' && source === 'live';
@@ -152,9 +152,9 @@ function ConnectionPill({ status, source, onClick }) {
   }
 
   return (
-    <button onClick={onClick} title="Backend status" style={{
+    <button type="button" onClick={onClick} title="Backend status" aria-label={`Backend status: ${label}`} style={{
       border: 'none', background: bg, color: fg, cursor: 'pointer',
-      padding: '5px 10px', borderRadius: 999,
+      padding: '5px 10px', borderRadius: 999, minHeight: 44,
       fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
       textTransform: 'uppercase', letterSpacing: '.14em', fontWeight: 600,
       display: 'inline-flex', alignItems: 'center', gap: 6,

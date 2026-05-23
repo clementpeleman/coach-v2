@@ -1,4 +1,4 @@
-// Profiel — Garmin, account, herstel, data-import.
+// Profiel - Garmin, account, herstel, data-import.
 const { useState: useStateP, useEffect: useEffectP } = React;
 const FCU = window.FC_UTILS;
 
@@ -73,7 +73,7 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
       const sessions = res?.import_status?.activity_sessions;
       const health = res?.import_status?.health_records;
       const extra = sessions != null
-        ? ` (${sessions} activiteiten, ${health ?? '?'} gezondheid — 30 dagen)`
+        ? ` (${sessions} activiteiten, ${health ?? '?'} gezondheid - 30 dagen)`
         : '';
       setSyncMsg((res.message || 'Import gestart. Even geduld…') + extra);
       setImportLog(Array.isArray(res.import_log) ? res.import_log : []);
@@ -129,10 +129,10 @@ function ProfileScreen({ recoveryScore, recoveryData, recoverySnapshot, apiStatu
           <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5 }}>
             {hasData
               ? `${activityCount} activiteiten en ${healthCount} gezondheidsrecords in de laatste 30 dagen.`
-              : 'Nog geen data in de database. Start een import — Garmin stuurt records via webhooks (enkele minuten).'}
+              : 'Nog geen data in de database. Start een import - Garmin stuurt records via webhooks (enkele minuten).'}
             {hasData && activityCount <= 2 && (
               <span style={{ display: 'block', marginTop: 8, color: 'var(--warn)' }}>
-                Weinig historiek zichtbaar? Klik opnieuw importeren en laat Garmin verbonden —
+                Weinig historiek zichtbaar? Klik opnieuw importeren en laat Garmin verbonden -
                 historiek komt via webhooks (2–15 min), niet via directe API-pull.
               </span>
             )}

@@ -108,7 +108,7 @@ export default function ActivitiesPage() {
           <MetricCard label="Duur" value={`${summary.duration_hours.toFixed(1)} h`} icon={<Clock className="h-4 w-4" />} />
           <MetricCard
             label="Gem. HR"
-            value={summary.average_heart_rate != null ? `${summary.average_heart_rate} bpm` : "—"}
+            value={summary.average_heart_rate != null ? `${summary.average_heart_rate} bpm` : "-"}
             icon={<Heart className="h-4 w-4" />}
           />
         </div>
@@ -137,7 +137,7 @@ export default function ActivitiesPage() {
                     <td className="px-3 py-2.5 text-right tabular-nums">{row.sessions}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{row.distance_km.toFixed(1)} km</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{row.duration_hours.toFixed(1)} h</td>
-                    <td className="px-5 py-2.5 text-right tabular-nums">{row.average_heart_rate ?? "—"}</td>
+                    <td className="px-5 py-2.5 text-right tabular-nums">{row.average_heart_rate ?? "-"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -195,9 +195,9 @@ export default function ActivitiesPage() {
                   <div className="grid gap-3 bg-slate-50 px-5 py-4 sm:grid-cols-3 lg:grid-cols-5">
                     <Detail label="Afstand" value={`${((a.distance_meters ?? 0) / 1000).toFixed(2)} km`} />
                     <Detail label="Duur" value={`${Math.round((a.duration_seconds ?? 0) / 60)} min`} />
-                    <Detail label="Gem. HR" value={a.average_heart_rate ? `${a.average_heart_rate} bpm` : "—"} />
-                    <Detail label="Max HR" value={a.max_heart_rate ? `${a.max_heart_rate} bpm` : "—"} />
-                    <Detail label="Calorieën" value={a.calories ? `${a.calories} kcal` : "—"} />
+                    <Detail label="Gem. HR" value={a.average_heart_rate ? `${a.average_heart_rate} bpm` : "-"} />
+                    <Detail label="Max HR" value={a.max_heart_rate ? `${a.max_heart_rate} bpm` : "-"} />
+                    <Detail label="Calorieën" value={a.calories ? `${a.calories} kcal` : "-"} />
                   </div>
                 )}
               </li>

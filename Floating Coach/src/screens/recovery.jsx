@@ -45,7 +45,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
         <div className="meta">
           <div>Op basis van slaap, HRV, stress & recente training</div>
           <div className="mono" style={{ marginTop: 4, color: 'var(--ink)' }}>
-            <b>0—6 schaal</b> · {sourceLabel}
+            <b>0-6 schaal</b> · {sourceLabel}
           </div>
         </div>
       </div>
@@ -74,7 +74,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
               </svg>
               <div style={{ position: 'absolute', inset: 0, display: 'flex',
                             flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ color: '#fff', fontSize: 96, fontWeight: 500,
+                <span style={{ color: 'var(--text-on-dark)', fontSize: 96, fontWeight: 500,
                   letterSpacing: '-.04em', lineHeight: 1 }}>{recoveryScore}</span>
                 <span className="mono" style={{ fontSize: 12, color: 'oklch(72% 0.01 100)',
                   textTransform: 'uppercase', letterSpacing: '.16em' }}>uit 6</span>
@@ -92,7 +92,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
               textTransform: 'uppercase', letterSpacing: '.16em', marginBottom: 10 }}>
               Aanbeveling
             </div>
-            <p style={{ fontSize: 26, lineHeight: 1.35, color: '#fff',
+            <p style={{ fontSize: 26, lineHeight: 1.35, color: 'var(--text-on-dark)',
                         letterSpacing: '-.015em', margin: 0, maxWidth: 540 }}>
               {FCUR.recoveryAdvice(recoveryScore)}
             </p>
@@ -130,7 +130,7 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
                 Bekijk aanbevolen training <span className="arrow">→</span>
               </button>
               <button className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent('fc-open-coach-orb'))}
-                style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)' }}>
+                style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)' }}>
                 Vraag de coach
               </button>
             </div>
@@ -506,7 +506,7 @@ function ScoreBreakdownCard({ breakdown, bodyBatteryAtWake }) {
                   color: 'var(--ink)',
                   padding: '7px 9px',
                   borderRadius: 999,
-                  background: '#fff',
+                  background: 'var(--text-on-dark)',
                   border: '1px solid oklch(86% 0.04 70)',
                 }}>
                   {cap.label}: max {cap.max}/6

@@ -90,26 +90,26 @@ window.FC_UTILS = {
     const avg = (arr) => arr.reduce((s, v) => s + v, 0) / arr.length;
     const diff = avg(second) - avg(first);
     if (diff >= 3) {
-      return 'HRV stijgt — autonoom herstel verbetert. Goed moment om op te bouwen.';
+      return 'HRV stijgt - autonoom herstel verbetert. Goed moment om op te bouwen.';
     }
     if (diff <= -3) {
-      return 'HRV daalt — let op slaap en belasting. Houd intensiteit conservatief.';
+      return 'HRV daalt - let op slaap en belasting. Houd intensiteit conservatief.';
     }
-    return 'HRV stabiel — houd je huidige trainingsritme aan.';
+    return 'HRV stabiel - houd je huidige trainingsritme aan.';
   },
   sleepStageInsight: ({ deepSleepMin, remMin, awakeMin, sleepHours }) => {
     if (sleepHours == null && deepSleepMin == null) return null;
     const parts = [];
     if (deepSleepMin != null) {
-      parts.push(`<b>Diepe slaap</b> ${deepSleepMin} min${deepSleepMin >= 60 ? ' — solide' : deepSleepMin >= 45 ? '' : ' — aan de lage kant'}.`);
+      parts.push(`<b>Diepe slaap</b> ${deepSleepMin} min${deepSleepMin >= 60 ? ' - solide' : deepSleepMin >= 45 ? '' : ' - aan de lage kant'}.`);
     }
     if (remMin != null) {
       parts.push(`REM ${remMin} min.`);
     }
     if (awakeMin != null && awakeMin >= 15) {
-      parts.push(`<b>Awake</b> ${awakeMin} min — lichte onderbrekingen in de nacht.`);
+      parts.push(`<b>Awake</b> ${awakeMin} min - lichte onderbrekingen in de nacht.`);
     } else if (awakeMin != null) {
-      parts.push(`Awake ${awakeMin} min — rustige nacht.`);
+      parts.push(`Awake ${awakeMin} min - rustige nacht.`);
     }
     return parts.join(' ');
   },

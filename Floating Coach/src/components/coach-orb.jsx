@@ -1,4 +1,4 @@
-// Floating Coach orb — persistent, click to expand into chat panel.
+// Floating Coach orb - persistent, click to expand into chat panel.
 const { useState, useEffect, useRef } = React;
 const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 
@@ -89,7 +89,7 @@ function CoachOrb({
   return (
     <div className="orb-wrap" data-screen-label="Floating Coach orb">
       {open && (
-        <div className="coach-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="coach-panel" role="dialog" aria-label="Coach chat" onClick={(e) => e.stopPropagation()}>
           {/* Header */}
           <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--line)',
                         display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -155,6 +155,7 @@ function CoachOrb({
           <div style={{ padding: '14px 16px 16px', borderTop: '1px solid var(--line)',
                         display: 'flex', gap: 8, alignItems: 'center' }}>
             <input
+              aria-label="Vraag iets aan je coach"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') send(draft); }}
@@ -163,14 +164,20 @@ function CoachOrb({
                         padding: '12px 16px', fontSize: 14, outline: 'none',
                         fontFamily: 'inherit' }}
             />
-            <button onClick={() => send(draft)} className="btn accent" style={{ padding: '12px 14px' }}>
+            <button onClick={() => send(draft)} className="btn accent" aria-label="Verstuur vraag" style={{ padding: '12px 14px' }}>
               <span className="mono">→</span>
             </button>
           </div>
         </div>
       )}
 
-      <div className="orb" onClick={() => setOpen((v) => !v)}>
+      <button type="button" className="orb"
+        aria-label={open ? 'Sluit coach' : 'Open coach'}
+        aria-expanded={open}
+        onClick={() => {
+          if (currentScreen === 'chat') return;
+          setOpen((v) => !v);
+        }}>
         <div className="face">
           <div className="mouth"></div>
           <div className="halo"></div>
@@ -181,7 +188,7 @@ function CoachOrb({
             Recovery {recoveryScore}/6
           </div>
         </div>
-      </div>
+      </button>
     </div>
   );
 }
@@ -194,7 +201,7 @@ function ChatBubble({ m }) {
       <div style={{
         maxWidth: '85%',
         background: isUser ? 'var(--ink)' : 'var(--bg-soft)',
-        color: isUser ? '#fff' : 'var(--ink)',
+        color: isUser ? 'var(--text-on-dark)' : 'var(--ink)',
         padding: '10px 14px',
         borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
         fontSize: 14, lineHeight: 1.5,
@@ -210,16 +217,8 @@ function ChatBubble({ m }) {
 function Dot({ delay }) {
   return <span style={{
     width: 6, height: 6, borderRadius: 999, background: 'var(--ink-4)',
-    display: 'inline-block', animation: `bounce 1s ease-in-out ${delay}s infinite`,
+    display: 'inline-block', animation: `thinking-pulse 1s cubic-bezier(.16,1,.3,1) ${delay}s infinite`,
   }}></span>;
-}
-
-// Local style injection for bounce keyframes
-if (!document.getElementById('__coach-orb-css')) {
-  const s = document.createElement('style');
-  s.id = '__coach-orb-css';
-  s.textContent = `@keyframes bounce { 0%,80%,100% { transform: translateY(0); opacity: .5; } 40% { transform: translateY(-4px); opacity: 1; } }`;
-  document.head.appendChild(s);
 }
 
 function mockReply(text, score, recoveryData) {

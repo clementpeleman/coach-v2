@@ -1,4 +1,4 @@
-// API client — same endpoints as FastAPI (via gateway on production domain).
+// API client - same endpoints as FastAPI (via gateway on production domain).
 (function () {
   const LOCAL_DEV_BASE = 'http://localhost:8000';
 

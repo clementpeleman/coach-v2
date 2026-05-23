@@ -58,7 +58,7 @@
       preferredTargetMode: preferredTargetModeForBlocks(blocks, sportType),
       intensityPct: previous?.intensityPct || 100,
       blocks,
-      note: previous?.note || 'Demo-voorstel — verbind Garmin voor live coachlogica.',
+      note: previous?.note || 'Demo-voorstel - verbind Garmin voor live coachlogica.',
       updatedAt: new Date().toISOString(),
     };
   }

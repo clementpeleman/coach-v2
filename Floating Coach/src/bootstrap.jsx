@@ -1,0 +1,15 @@
+import './data.js';
+import './utils.js';
+import './api.js';
+import './session.js';
+import './workout-plan.js';
+import './hooks.jsx';
+import './components/coach-orb.jsx';
+import './screens/onboarding.jsx';
+import './screens/dashboard.jsx';
+import './screens/chat.jsx';
+import './screens/activities.jsx';
+import './screens/workout.jsx';
+import './screens/recovery.jsx';
+import './screens/profile.jsx';
+import './app.jsx';

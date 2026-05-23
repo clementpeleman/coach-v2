@@ -169,8 +169,8 @@ export default function AnalysePage() {
             <Section title="Trainingspatronen" icon={<Calendar className="h-5 w-5 text-slate-500" />}>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Stat label="Sessies/week" value={String(patterns.sessions_per_week)} />
-                <Stat label="Gem. rustdagen" value={patterns.avg_days_between_sessions ? String(patterns.avg_days_between_sessions) : "—"} />
-                <Stat label="Max rustdagen" value={patterns.max_days_between_sessions ? String(patterns.max_days_between_sessions) : "—"} />
+                <Stat label="Gem. rustdagen" value={patterns.avg_days_between_sessions ? String(patterns.avg_days_between_sessions) : "-"} />
+                <Stat label="Max rustdagen" value={patterns.max_days_between_sessions ? String(patterns.max_days_between_sessions) : "-"} />
                 <Stat label="Actieve weken" value={String(patterns.total_active_weeks)} />
               </div>
               {patterns.favorite_days.length > 0 && (
@@ -193,15 +193,15 @@ export default function AnalysePage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Sessies" value={String(run.total_sessions)} />
             <Stat label="Totale afstand" value={`${run.total_distance_km} km`} />
-            <Stat label="Gem. afstand" value={run.avg_distance_km ? `${run.avg_distance_km} km` : "—"} />
-            <Stat label="Gem. duur" value={run.avg_duration_min ? `${run.avg_duration_min} min` : "—"} />
-            <Stat label="Gem. tempo" value={run.avg_pace_min_km ? `${run.avg_pace_min_km} min/km` : "—"} />
-            <Stat label="Beste tempo" value={run.best_pace_min_km ? `${run.best_pace_min_km} min/km` : "—"} />
-            <Stat label="Gem. hartslag" value={run.avg_heart_rate ? `${run.avg_heart_rate} bpm` : "—"} />
-            <Stat label="Max hartslag" value={run.max_heart_rate_observed ? `${run.max_heart_rate_observed} bpm` : "—"} />
-            <Stat label="Gem. cadans" value={run.avg_cadence_spm ? `${run.avg_cadence_spm} spm` : "—"} />
-            <Stat label="Langste run" value={run.longest_run_km ? `${run.longest_run_km} km` : "—"} />
-            <Stat label="Cal/sessie" value={run.avg_calories_per_session ? `${run.avg_calories_per_session}` : "—"} />
+            <Stat label="Gem. afstand" value={run.avg_distance_km ? `${run.avg_distance_km} km` : "-"} />
+            <Stat label="Gem. duur" value={run.avg_duration_min ? `${run.avg_duration_min} min` : "-"} />
+            <Stat label="Gem. tempo" value={run.avg_pace_min_km ? `${run.avg_pace_min_km} min/km` : "-"} />
+            <Stat label="Beste tempo" value={run.best_pace_min_km ? `${run.best_pace_min_km} min/km` : "-"} />
+            <Stat label="Gem. hartslag" value={run.avg_heart_rate ? `${run.avg_heart_rate} bpm` : "-"} />
+            <Stat label="Max hartslag" value={run.max_heart_rate_observed ? `${run.max_heart_rate_observed} bpm` : "-"} />
+            <Stat label="Gem. cadans" value={run.avg_cadence_spm ? `${run.avg_cadence_spm} spm` : "-"} />
+            <Stat label="Langste run" value={run.longest_run_km ? `${run.longest_run_km} km` : "-"} />
+            <Stat label="Cal/sessie" value={run.avg_calories_per_session ? `${run.avg_calories_per_session}` : "-"} />
             <Stat label="Hoogtemeters" value={`${run.total_elevation_m} m`} />
           </div>
         </Section>
@@ -213,15 +213,15 @@ export default function AnalysePage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Sessies" value={String(cycle.total_sessions)} />
             <Stat label="Totale afstand" value={`${cycle.total_distance_km} km`} />
-            <Stat label="Gem. afstand" value={cycle.avg_distance_km ? `${cycle.avg_distance_km} km` : "—"} />
-            <Stat label="Gem. duur" value={cycle.avg_duration_min ? `${cycle.avg_duration_min} min` : "—"} />
-            <Stat label="Gem. snelheid" value={cycle.avg_speed_kmh ? `${cycle.avg_speed_kmh} km/u` : "—"} />
-            <Stat label="Max snelheid" value={cycle.max_speed_kmh ? `${cycle.max_speed_kmh} km/u` : "—"} />
-            <Stat label="Gem. hartslag" value={cycle.avg_heart_rate ? `${cycle.avg_heart_rate} bpm` : "—"} />
-            <Stat label="Max hartslag" value={cycle.max_heart_rate_observed ? `${cycle.max_heart_rate_observed} bpm` : "—"} />
-            <Stat label="Gem. hoogtemeters" value={cycle.avg_elevation_m ? `${cycle.avg_elevation_m} m` : "—"} />
-            <Stat label="Langste rit" value={cycle.longest_ride_km ? `${cycle.longest_ride_km} km` : "—"} />
-            <Stat label="Cal/sessie" value={cycle.avg_calories_per_session ? `${cycle.avg_calories_per_session}` : "—"} />
+            <Stat label="Gem. afstand" value={cycle.avg_distance_km ? `${cycle.avg_distance_km} km` : "-"} />
+            <Stat label="Gem. duur" value={cycle.avg_duration_min ? `${cycle.avg_duration_min} min` : "-"} />
+            <Stat label="Gem. snelheid" value={cycle.avg_speed_kmh ? `${cycle.avg_speed_kmh} km/u` : "-"} />
+            <Stat label="Max snelheid" value={cycle.max_speed_kmh ? `${cycle.max_speed_kmh} km/u` : "-"} />
+            <Stat label="Gem. hartslag" value={cycle.avg_heart_rate ? `${cycle.avg_heart_rate} bpm` : "-"} />
+            <Stat label="Max hartslag" value={cycle.max_heart_rate_observed ? `${cycle.max_heart_rate_observed} bpm` : "-"} />
+            <Stat label="Gem. hoogtemeters" value={cycle.avg_elevation_m ? `${cycle.avg_elevation_m} m` : "-"} />
+            <Stat label="Langste rit" value={cycle.longest_ride_km ? `${cycle.longest_ride_km} km` : "-"} />
+            <Stat label="Cal/sessie" value={cycle.avg_calories_per_session ? `${cycle.avg_calories_per_session}` : "-"} />
             <Stat label="Hoogtemeters" value={`${cycle.total_elevation_m} m`} />
           </div>
         </Section>

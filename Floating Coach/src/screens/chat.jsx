@@ -1,4 +1,4 @@
-// Coach chat — full page version (vs. floating orb).
+// Coach chat - full page version (vs. floating orb).
 const { useState: useStateC, useEffect: useEffectC, useRef: useRefC } = React;
 const FCU = window.FC_UTILS;
 
@@ -87,7 +87,7 @@ function ChatScreen({
         const res = await window.FC_API.sendChatMessage({
           userId,
           message: t,
-          // The backend keeps its own state — we still pass history to seed context.
+          // The backend keeps its own state - we still pass history to seed context.
           history: messages.map((m) => ({ role: m.role, content: m.content })),
           context: {
             weather,
@@ -235,6 +235,7 @@ function ChatScreen({
         <div style={{ padding: '20px 28px 24px', borderTop: '1px solid var(--line)',
                       display: 'flex', gap: 10, alignItems: 'center' }}>
           <input
+            aria-label="Bericht aan coach"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
@@ -345,7 +346,7 @@ function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recov
   return (
     <div className="card tight" style={{
       background: 'var(--ink)',
-      color: '#fff',
+      color: 'var(--text-on-dark)',
       borderColor: 'transparent',
       position: 'sticky',
       top: 18,
@@ -354,7 +355,7 @@ function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recov
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12 }}>
         <div>
           <div className="label" style={{ color: 'oklch(70% 0.01 100)', marginBottom: 8 }}>Trainingvoorstel</div>
-          <h2 style={{ color: '#fff', lineHeight: 1.15 }}>{typeLabel}</h2>
+          <h2 style={{ color: 'var(--text-on-dark)', lineHeight: 1.15 }}>{typeLabel}</h2>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
           <span className={plan.status === 'approved' ? 'tag accent' : 'tag'}
@@ -396,11 +397,11 @@ function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recov
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 14 }}>
         <button className="btn ghost" onClick={() => quickAdjust('korter')}
-          style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '8px 10px' }}>
+          style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '8px 10px' }}>
           Korter
         </button>
         <button className="btn ghost" onClick={() => quickAdjust('rustiger')}
-          style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '8px 10px' }}>
+          style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '8px 10px' }}>
           Rustiger
         </button>
       </div>
@@ -410,7 +411,7 @@ function TrainingProposalCard({ draftWorkout, setDraftWorkout, onNavigate, recov
           Goedkeuren
         </button>
         <button className="btn ghost" onClick={() => onNavigate?.('workout')}
-          style={{ color: '#fff', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '11px 12px' }}>
+          style={{ color: 'var(--text-on-dark)', borderColor: 'oklch(35% 0.005 100)', justifyContent: 'center', padding: '11px 12px' }}>
           Open plan
         </button>
       </div>
@@ -455,7 +456,7 @@ function BigBubble({ m }) {
                   maxWidth: '78%', alignSelf: isUser ? 'flex-end' : 'flex-start' }}>
       <div style={{
         background: isUser ? 'var(--ink)' : 'var(--bg-soft)',
-        color: isUser ? '#fff' : 'var(--ink)',
+        color: isUser ? 'var(--text-on-dark)' : 'var(--ink)',
         padding: '14px 18px',
         borderRadius: isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
         fontSize: 15, lineHeight: 1.55,
@@ -471,7 +472,7 @@ function BigBubble({ m }) {
 function ThinkDot({ d }) {
   return <span style={{
     width: 7, height: 7, borderRadius: 999, background: 'var(--ink-4)',
-    display: 'inline-block', animation: `bounce 1s ease-in-out ${d}s infinite`,
+    display: 'inline-block', animation: `thinking-pulse 1s cubic-bezier(.16,1,.3,1) ${d}s infinite`,
   }}></span>;
 }
 
@@ -483,10 +484,10 @@ function mockReplyChat(text, score, recoveryData) {
     const battery = R.bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery ?? '–';
     return `Je slaap staat op <b>${R.sleepHours ? `${R.sleepHours.toFixed(1)} uur` : 'geen data'}</b> met sleep score <b>${R.sleepScore ?? 'geen data'}</b>. Diepe slaap ${R.deepSleepMin ?? '–'} min, REM ${R.remMin ?? '–'} min, awake ${R.awakeMin ?? '–'} min. Body Battery ${batteryLabel} staat op ${battery}${battery === '–' ? '' : '%'}<br/><br/>Dat is de meest recente Garmin-data die ik lokaal heb.`;
   }
-  if (t.includes('herstel') || t.includes('recovery') || t.includes('herstel check')) return `<b>Herstelscore ${score}/6 — ${FCU.recoveryLabel(score)}</b><br/><br/>${FCU.recoveryAdvice(score)} HRV staat op <b>${R.hrvOvernight ?? '–'}ms</b>. Resting HR <b>${R.restingHr ?? '–'} bpm</b>.`;
+  if (t.includes('herstel') || t.includes('recovery') || t.includes('herstel check')) return `<b>Herstelscore ${score}/6 - ${FCU.recoveryLabel(score)}</b><br/><br/>${FCU.recoveryAdvice(score)} HRV staat op <b>${R.hrvOvernight ?? '–'}ms</b>. Resting HR <b>${R.restingHr ?? '–'} bpm</b>.`;
   if (t.includes('duur')) return `Klaargezet. <b>75 min duurloop</b>, zone 2 (HR 138-152). Warming-up 8 min, duurblok 60 min, cooling-down 7 min. <i>FIT-bestand staat in Garmin Connect.</i><br/><br/>Wil je dat ik er ook een drinkmoment inplan?`;
   if (t.includes('interval') || t.includes('tempo') || t.includes('drempel')) return `<b>2× 12 min tempo</b> met 4 min herstel tussendoor.<br/><br/>WU 12 min easy · 12 min @ drempel (162-168) · 4 min easy · 12 min @ drempel · CD 8 min<br/><br/>Wil je dit nu starten?`;
-  if (t.includes('analyseer') || t.includes('trainingsweek') || t.includes('week') || t.includes('activiteit')) return `<b>Deze week:</b><br/>· 3 sessies · 31 km · 3u 06min<br/>· Volume <span style="color:#c0392b">29% onder</span> 4-weken gemiddelde<br/>· Intensiteit op peil (1× drempel woensdag)<br/><br/>Voeg dit weekend een duurloop van 75-90 min toe om je weekvolume in balans te brengen.`;
+  if (t.includes('analyseer') || t.includes('trainingsweek') || t.includes('week') || t.includes('activiteit')) return `<b>Deze week:</b><br/>· 3 sessies · 31 km · 3u 06min<br/>· Volume <span style="color:var(--bad)">29% onder</span> 4-weken gemiddelde<br/>· Intensiteit op peil (1× drempel woensdag)<br/><br/>Voeg dit weekend een duurloop van 75-90 min toe om je weekvolume in balans te brengen.`;
   if (t.includes('vergelijk')) return `Tussen je <b>Tempo 4×5 min</b> (6/5) en <b>Intervaltraining 6×800m</b> (11/5):<br/>· Avg HR daalde van 158 → 163 bpm (zelfde inspanning, +5 bpm hoger door snellere tempo)<br/>· Pace was 8% sneller deze week<br/>· Beide sessies aan boven-drempel`;
   if (t.includes('wedstrijd') || t.includes('plan')) return `Welke wedstrijd plan je? Geef datum en afstand, dan zet ik een meerwekenplan op met intensiteits- en taperfases. Bv. <i>"10 km op 14 juni"</i>.`;
   if (t.includes('genereer workout')) return `Welke training wil je? Kies type en duur, of laat het aan mij over op basis van je <b>recovery ${score}/6</b>. Voorbeelden: <i>"45 min tempo"</i>, <i>"makkelijke duurloop 60 min"</i>.`;
