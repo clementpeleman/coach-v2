@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 
 WORKOUT_TYPES = ["HERSTEL", "DUUR", "THRESHOLD", "VO2MAX", "SPRINT"]
 SPORT_TYPES = ["WALKING", "RUNNING", "CYCLING", "INDOOR_CYCLING", "SWIMMING"]
+TYPE_RANK = {t: i for i, t in enumerate(WORKOUT_TYPES)}
+STRENGTH_ACTIVITY_KEYWORDS = ("STRENGTH", "HIIT", "GYM", "WEIGHT", "KRAFT", "CROSSFIT")
 
 TYPE_LABELS = {
     "HERSTEL": "Herstel",
@@ -113,7 +115,18 @@ def build_recommendation(
     )
     pattern = (patterns.get("by_type") or {}).get(workout_type) or {}
     sport_type = _choose_sport(workout_type, pattern, training_profile)
+    workout_type, sport_type, duration_pct, signal_notes = _apply_load_and_pattern_signals(
+        workout_type,
+        sport_type,
+        recovery_score if recovery_score is not None else 3,
+        training_profile,
+        recovery,
+        metrics or {},
+    )
+    pattern = (patterns.get("by_type") or {}).get(workout_type) or pattern
     duration_min = _planned_duration(workout_type, sport_type, pattern)
+    if duration_pct:
+        duration_min = max(20, int(round(duration_min * (1 + duration_pct))))
     intensity_pct = 100
     duration_min, intensity_pct = _apply_weather_adjustments(duration_min, intensity_pct, weather, workout_type)
     personal_profile = ((training_profile or {}).get("personal_targets") or {}).get(sport_type)
@@ -125,7 +138,18 @@ def build_recommendation(
     target_mode = preferred_target_mode(blocks, sport_type)
     warnings = _collect_warnings(blocks)
     confidence = _confidence(personal_profile, pattern)
-    reasoning = _reasoning(workout_type, sport_type, recovery_score, confidence, pattern, weather, warnings)
+    reasoning = _reasoning(
+        workout_type,
+        sport_type,
+        recovery_score,
+        confidence,
+        pattern,
+        weather,
+        warnings,
+        signal_notes,
+        training_profile,
+        metrics or {},
+    )
 
     draft_id = _stable_id(user_id, now, workout_type, sport_type, recovery_score)
     return {
@@ -457,6 +481,112 @@ def _type_from_recovery(score: int, metrics: Dict[str, Any], workout_patterns: O
     return workout_type_from_readiness(score, metrics, workout_patterns=workout_patterns)
 
 
+def _step_down_type(workout_type: str) -> str:
+    rank = TYPE_RANK.get(workout_type, 1)
+    return WORKOUT_TYPES[max(0, rank - 1)]
+
+
+def _step_up_type(workout_type: str) -> str:
+    rank = TYPE_RANK.get(workout_type, 1)
+    return WORKOUT_TYPES[min(len(WORKOUT_TYPES) - 1, rank + 1)]
+
+
+def _is_strength_activity(activity_type: Optional[str]) -> bool:
+    upper = (activity_type or "").upper()
+    return any(keyword in upper for keyword in STRENGTH_ACTIVITY_KEYWORDS)
+
+
+def _recent_training_sessions(recovery: Optional[Dict[str, Any]], metrics: Dict[str, Any]) -> list[Dict[str, Any]]:
+    recent = (recovery or {}).get("recent_training") or {}
+    sessions = recent.get("sessions") or metrics.get("recentTrainingSessions") or []
+    return [session for session in sessions if isinstance(session, dict)]
+
+
+def _recent_classified_types(patterns: Dict[str, Any], limit: int = 5) -> list[str]:
+    classified = patterns.get("classified_activities") or []
+    return [item["type"] for item in classified[:limit] if item.get("type")]
+
+
+def _next_type_from_sequence(recent_types: list[str], common_sequence: list[str]) -> Optional[str]:
+    if len(common_sequence) < 2 or not recent_types:
+        return None
+    tail = recent_types[:2]
+    if len(tail) == 2 and tail[0] == common_sequence[0] and tail[1] == common_sequence[1]:
+        return common_sequence[2] if len(common_sequence) > 2 else None
+    if len(tail) == 1 and tail[0] == common_sequence[0]:
+        return common_sequence[1]
+    return None
+
+
+def _apply_load_and_pattern_signals(
+    workout_type: str,
+    sport_type: str,
+    recovery_score: int,
+    training_profile: Optional[Dict[str, Any]],
+    recovery: Optional[Dict[str, Any]],
+    metrics: Dict[str, Any],
+) -> tuple[str, str, float, list[str]]:
+    notes: list[str] = []
+    duration_pct = 0.0
+    patterns = (training_profile or {}).get("workout_patterns") or {}
+    weekly = patterns.get("weekly_pattern") or {}
+    sport_baselines = (training_profile or {}).get("sport_baselines") or {}
+    sessions = _recent_training_sessions(recovery, metrics)
+
+    for session in sessions:
+        hours_ago = session.get("hours_ago")
+        if hours_ago is None or hours_ago > 30:
+            continue
+        if _is_strength_activity(session.get("activity_type")):
+            if workout_type not in {"HERSTEL"}:
+                workout_type = "HERSTEL"
+                if sport_type == "RUNNING":
+                    sport_type = "CYCLING"
+                name = session.get("activity_name") or "krachttraining"
+                notes.append(f"Gisteren {name}; vandaag herstel/cross-training i.p.v. intensiteit.")
+            break
+
+    recent_hard = any(
+        (session.get("hours_ago") or 999) <= 72
+        and session.get("load", 0) >= 35
+        for session in sessions
+    )
+    if recent_hard and workout_type in {"THRESHOLD", "VO2MAX", "SPRINT"}:
+        workout_type = _step_down_type(workout_type)
+        notes.append("Recente zware sessie (<72u) — intensiteit één stap omlaag.")
+
+    hard_per_week = weekly.get("hard_sessions_per_week") or 0
+    if hard_per_week >= 1.0 and recent_hard and workout_type in {"THRESHOLD", "VO2MAX", "SPRINT"}:
+        workout_type = _step_down_type(workout_type)
+        notes.append(f"Wekelijks patroon: {hard_per_week} harde sessies/week — vandaag conservatiever.")
+
+    baseline = sport_baselines.get(sport_type) or {}
+    load_ratio = baseline.get("load_ratio")
+    if load_ratio is not None:
+        if load_ratio > 1.25:
+            workout_type = _step_down_type(workout_type)
+            duration_pct -= 0.12
+            notes.append(f"Load ratio {load_ratio} voor {SPORT_LABELS.get(sport_type, sport_type).lower()} — volume/intensiteit terug.")
+        elif load_ratio < 0.75 and recovery_score >= 4 and workout_type not in {"SPRINT"}:
+            duration_pct += 0.10
+            notes.append(f"Load ratio {load_ratio} — lichte volume-bump mogelijk.")
+
+    common_sequence = weekly.get("common_sequence") or []
+    recent_types = _recent_classified_types(patterns)
+    if not recent_types and sessions:
+        recent_types = [
+            "HERSTEL" if _is_strength_activity(session.get("activity_type")) else "DUUR"
+            for session in sessions[:3]
+        ]
+    next_type = _next_type_from_sequence(recent_types, common_sequence)
+    if next_type and TYPE_RANK.get(next_type, 0) <= TYPE_RANK.get(workout_type, 0) + 1:
+        if recovery_score >= 3 or next_type in {"HERSTEL", "DUUR"}:
+            workout_type = next_type
+            notes.append(f"Volgt je gebruikelijke reeks ({' → '.join(common_sequence[:3])}).")
+
+    return workout_type, sport_type, duration_pct, notes
+
+
 def _choose_sport(
     workout_type: str,
     pattern: Dict[str, Any],
@@ -609,8 +739,27 @@ def _collect_warnings(blocks: list[Dict[str, Any]]) -> list[str]:
     return warnings
 
 
-def _reasoning(workout_type: str, sport_type: str, score: int, confidence: str, pattern: Dict[str, Any], weather: Optional[Dict[str, Any]], warnings: list[str]) -> list[str]:
+def _reasoning(
+    workout_type: str,
+    sport_type: str,
+    score: int,
+    confidence: str,
+    pattern: Dict[str, Any],
+    weather: Optional[Dict[str, Any]],
+    warnings: list[str],
+    signal_notes: Optional[list[str]] = None,
+    training_profile: Optional[Dict[str, Any]] = None,
+    metrics: Optional[Dict[str, Any]] = None,
+) -> list[str]:
     lines = [f"Recovery {score}/6 kiest {TYPE_LABELS.get(workout_type, workout_type).lower()} voor {SPORT_LABELS.get(sport_type, sport_type).lower()}."]
+    if signal_notes:
+        lines.extend(signal_notes[:3])
+    penalty = (metrics or {}).get("recentTrainingPenalty")
+    if penalty and penalty >= 0.4:
+        lines.append(f"Recente belasting (−{penalty:.1f} op readiness) meegewogen.")
+    load_ratio = ((training_profile or {}).get("sport_baselines") or {}).get(sport_type, {}).get("load_ratio")
+    if load_ratio is not None and not any("Load ratio" in line for line in lines):
+        lines.append(f"Sport load ratio: {load_ratio}.")
     if pattern.get("typical_structure"):
         lines.append(f"Structuur gebaseerd op je patroon: {pattern.get('typical_structure')}.")
     lines.append(f"Target confidence: {confidence}.")

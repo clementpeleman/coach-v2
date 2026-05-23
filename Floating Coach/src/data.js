@@ -23,7 +23,7 @@ window.FC_DATA = (() => {
     stressTrend: [42, 38, 35, 40, 33, 30, 31],
   };
 
-  // Today's recommended workout (changes based on recovery)
+  // Demo recommendations — mirrors backend workout_type_from_readiness (score 5 → VO2MAX, SPRINT only with history)
   const recommendedByRecovery = {
     0: { type: 'HERSTEL', dutch: 'Herstel', sport: 'Wandelen', duration: 40, intensity: 'Zeer laag', desc: 'Korte herstelwandeling. Hartslag onder 120.', color: 'rest' },
     1: { type: 'HERSTEL', dutch: 'Herstel', sport: 'Wandelen', duration: 45, intensity: 'Zeer laag', desc: 'Actief herstel. Body Battery aanvullen.', color: 'rest' },

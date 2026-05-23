@@ -93,7 +93,7 @@ function App() {
     if (!session.userId) {
       if (!window.FC_WORKOUT_PLAN) return;
       setDraftWorkout((current) => (
-        current && current.source === 'auto'
+        current && ['demo', 'auto'].includes(current.source)
           ? current
           : window.FC_WORKOUT_PLAN.buildDraft({ recoveryScore: recoveryScoreForPlan, trainingProfile: null })
       ));
@@ -102,7 +102,7 @@ function App() {
 
     const cacheKey = `training_recommendation_${session.userId}`;
     const canReplace = (current) => !current || (
-      ['auto', 'backend', 'stale-live'].includes(current.source)
+      ['demo', 'auto', 'backend', 'stale-live'].includes(current.source)
       && current.status !== 'approved'
     );
     const cached = readAppLiveCache(cacheKey);
@@ -314,6 +314,7 @@ function App() {
     onNavigate: setScreen,
     apiStatus: apiStatus.status,
     userId: session.userId,
+    allowDemo: !session.userId,
     profile,
     trainingProfile,
     chatMessages,

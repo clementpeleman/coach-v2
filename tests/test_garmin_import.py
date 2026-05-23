@@ -110,6 +110,9 @@ def test_build_import_log_includes_backfill_and_replay():
     assert "backfill" in steps
     assert "database" in steps
     assert any("duplicate" in entry["message"].lower() for entry in log)
+
+
+def test_resolve_internal_user_prefers_token():
     token = MagicMock(user_id=42)
     db = MagicMock()
     db.query.return_value.filter.return_value.first.side_effect = [token, None]

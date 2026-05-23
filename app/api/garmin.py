@@ -528,6 +528,8 @@ def normalize_training_sport(activity: GarminActivityData) -> str:
         return "WALKING"
     if "RUN" in combined:
         return "RUNNING"
+    if any(token in combined for token in ("STRENGTH", "KRAFT", "GYM", "HIIT", "WEIGHT", "CROSSFIT")):
+        return "STRENGTH_TRAINING"
     if activity_type == "CARDIO_TRAINING":
         return "WALKING"
     return activity_type or "UNKNOWN"
@@ -1009,6 +1011,20 @@ def build_sport_baselines(activities: list[GarminActivityData], days: int, now: 
         }
 
     return result
+
+
+def _dominant_sport(sport_baselines: Dict[str, Dict]) -> Optional[str]:
+    """Return sport with most sessions in the current window."""
+    if not sport_baselines:
+        return None
+    ranked = sorted(
+        sport_baselines.items(),
+        key=lambda item: ((item[1] or {}).get("current") or {}).get("sessions", 0),
+        reverse=True,
+    )
+    top_sport, top_data = ranked[0]
+    sessions = ((top_data or {}).get("current") or {}).get("sessions", 0)
+    return top_sport if sessions > 0 and top_sport in {"WALKING", "RUNNING", "CYCLING", "INDOOR_CYCLING", "SWIMMING"} else None
 
 
 def _activity_name_hint(activity: GarminActivityData) -> Optional[str]:
@@ -2192,13 +2208,15 @@ async def training_profile(
             ),
         ).order_by(GarminActivityAuxiliaryData.start_time.desc()).all()
 
+        sport_baselines = build_sport_baselines(activities, current_days, now)
         return {
             "period_days": days,
             "current_days": current_days,
             "generated_at": now.isoformat(),
             "personal_targets": build_personal_training_profile(activities, activity_details),
-            "sport_baselines": build_sport_baselines(activities, current_days, now),
+            "sport_baselines": sport_baselines,
             "workout_patterns": build_workout_patterns(activities, activity_details),
+            "dominant_sport": _dominant_sport(sport_baselines),
             "method": {
                 "phase": 2,
                 "source": "Garmin activityDetails samples/laps with activity summary fallback",
@@ -2232,13 +2250,15 @@ def _training_context(db: Session, user_id: int, days: int = 120, current_days: 
             GarminActivityAuxiliaryData.start_time.is_(None),
         ),
     ).order_by(GarminActivityAuxiliaryData.start_time.desc()).all()
+    sport_baselines = build_sport_baselines(activities, current_days, now)
     return {
         "period_days": days,
         "current_days": current_days,
         "generated_at": now.isoformat(),
         "personal_targets": build_personal_training_profile(activities, activity_details),
-        "sport_baselines": build_sport_baselines(activities, current_days, now),
+        "sport_baselines": sport_baselines,
         "workout_patterns": build_workout_patterns(activities, activity_details),
+        "dominant_sport": _dominant_sport(sport_baselines),
     }
 
 
@@ -2888,17 +2908,11 @@ async def receive_deregistration_webhook(
                     db.delete(garmin_token)
                     logger.info(f"Deleted tokens for Garmin user {garmin_user_id}")
                 else:
-                    errors.append(f"No token found for Garmin user {garmin_user_id}")
+                    logger.info(
+                        f"Deregistration for Garmin user {garmin_user_id}: token already absent"
+                    )
 
-        db.commit()
-        if errors:
-            event.status = "partial"
-            event.error = "\n".join(errors)
-        else:
-            event.status = "processed"
-            event.error = None
-        event.updated_at = datetime.utcnow()
-        db.commit()
+        _finish_webhook_event(db, event, errors)
         return {"status": "received"}
 
     except Exception as e:

@@ -145,7 +145,7 @@ def build_live_recovery_snapshot(
         .filter(
             GarminActivityData.user_id == user_id,
             GarminActivityData.summary_type.in_(["activities", "manuallyUpdatedActivities"]),
-            GarminActivityData.start_time >= datetime.utcnow() - timedelta(hours=48),
+            GarminActivityData.start_time >= datetime.utcnow() - timedelta(hours=72),
         )
         .order_by(GarminActivityData.start_time.desc())
         .all()
@@ -206,6 +206,7 @@ def build_live_recovery_snapshot(
         else (round(sum(hrv_values) / len(hrv_values)) if hrv_values else None)
     )
     hrv_history = _hrv_history(db, user_id, since) if readiness_version == READINESS_VERSION_V4 else []
+    hrv_trend = list(reversed(hrv_history)) if hrv_history else []
 
     if not stress_values:
         stale_signals.append("stress_missing")
@@ -273,7 +274,7 @@ def build_live_recovery_snapshot(
             "raw_score": readiness.raw_score,
             "notes": [
                 "Health signals use sleep, stress, current Body Battery and HRV.",
-                "Recent training reduces the score for 48h based on duration and HR intensity (% of personal max).",
+                "Recent training reduces the score for 72h based on duration, activity type and HR intensity (% of personal max).",
                 "HRV v4 uses a 14-night median baseline when enough history exists.",
             ],
         },
@@ -298,7 +299,7 @@ def build_live_recovery_snapshot(
             "hrvDeviationPct": readiness.hrv_deviation_pct,
             "restingHr": daily.get("restingHeartRateInBeatsPerMinute"),
             "currentHeartRate": current_hr,
-            "hrvTrend": [round(v) for v in hrv_values[-7:]],
+            "hrvTrend": hrv_trend,
             "stressTrend": stress_values[-24:],
             "hrTrend": [round(v) for v in heart_rate_values[-60:]],
             "steps": daily.get("steps"),
@@ -308,6 +309,7 @@ def build_live_recovery_snapshot(
             "recentTrainingPenalty": training_fatigue["penalty"],
             "recentTrainingLabel": training_fatigue["label"],
             "recentActivityCount48h": training_fatigue["recent_activity_count"],
+            "recentTrainingSessions": training_fatigue["sessions"],
             "hardestRecentActivity": training_fatigue["hardest_activity"],
         },
     }

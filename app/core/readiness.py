@@ -17,6 +17,26 @@ from app.core.hr_profile import (
 READINESS_VERSION_V3 = "current_readiness_v3"
 READINESS_VERSION_V4 = "readiness_v4"
 
+STRENGTH_ACTIVITY_KEYWORDS = ("STRENGTH", "HIIT", "GYM", "WEIGHT", "KRAFT", "CROSSFIT")
+FATIGUE_DECAY_HOURS = 72
+HARD_SESSION_FLOOR = 1.1
+HARD_SESSION_FLOOR_START_H = 36
+
+
+def _is_strength_activity(activity_type: str) -> bool:
+    upper = (activity_type or "").upper()
+    return any(keyword in upper for keyword in STRENGTH_ACTIVITY_KEYWORDS)
+
+
+def _hard_session_floor(hours_ago: float) -> float:
+    """Linear decay of hard-session floor from 36h (1.1) to 72h (0)."""
+    if hours_ago <= HARD_SESSION_FLOOR_START_H:
+        return HARD_SESSION_FLOOR
+    if hours_ago >= FATIGUE_DECAY_HOURS:
+        return 0.0
+    span = FATIGUE_DECAY_HOURS - HARD_SESSION_FLOOR_START_H
+    return HARD_SESSION_FLOOR * max(0.0, (FATIGUE_DECAY_HOURS - hours_ago) / span)
+
 
 @dataclass
 class ReadinessResult:
@@ -32,7 +52,7 @@ class ReadinessResult:
 
 
 def compute_recent_fatigue(activities: list[Any], hr_profile: Optional[HRProfile] = None) -> Dict:
-    """Estimate short-term fatigue from recent sessions (typically last 48h)."""
+    """Estimate short-term fatigue from recent sessions (typically last 72h)."""
     now = datetime.utcnow()
     profile = hr_profile or resolve_global_hr_profile(activities)
     effective_max = profile.effective_max
@@ -50,13 +70,20 @@ def compute_recent_fatigue(activities: list[Any], hr_profile: Optional[HRProfile
         avg_hr = activity.average_heart_rate or 0
         max_hr = activity.max_heart_rate or 0
         activity_type = (activity.activity_type or "").upper()
+        is_strength = _is_strength_activity(activity_type)
 
         intensity = 1.0 + hr_intensity_bonus(int(avg_hr), int(max_hr), effective_max)
         if "RUN" in activity_type:
             intensity += 0.10
+        if is_strength:
+            # Strength/HIIT often has low average HR but still creates meaningful load.
+            intensity = max(intensity, 1.15 + min(duration_min, 90) / 120)
 
-        decay = max(0.35, 1 - (hours_ago / 72))
+        decay = max(0.35, 1 - (hours_ago / FATIGUE_DECAY_HOURS))
         session_load = duration_min * intensity * decay
+        if is_strength:
+            strength_floor = duration_min * 0.65 * decay
+            session_load = max(session_load, strength_floor)
         weighted_load += session_load
 
         summary = {
@@ -70,6 +97,7 @@ def compute_recent_fatigue(activities: list[Any], hr_profile: Optional[HRProfile
             "max_heart_rate": activity.max_heart_rate,
             "hr_profile_max": effective_max,
             "load": round(session_load, 1),
+            "strength": is_strength,
         }
         session_summaries.append(summary)
         if hardest is None or summary["load"] > hardest["load"]:
@@ -93,7 +121,11 @@ def compute_recent_fatigue(activities: list[Any], hr_profile: Optional[HRProfile
             session["duration_minutes"],
             session["hours_ago"],
         ):
-            penalty = max(penalty, 1.1)
+            penalty = max(penalty, _hard_session_floor(session["hours_ago"]))
+        elif session.get("strength") and session["hours_ago"] <= FATIGUE_DECAY_HOURS:
+            strength_penalty = min(0.9, 0.35 + session["duration_minutes"] / 90)
+            strength_penalty *= max(0.0, 1 - (session["hours_ago"] / FATIGUE_DECAY_HOURS))
+            penalty = max(penalty, round(strength_penalty, 2))
 
     label = "laag"
     if penalty >= 1.2:

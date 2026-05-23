@@ -2,9 +2,10 @@
 const { useEffect: useEffectR } = React;
 const FCUR = window.FC_UTILS;
 
-function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, embedded }) {
+function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavigate, embedded, allowDemo }) {
   const D = window.FC_DATA;
-  const R = recoveryData || D.recovery;
+  const demoAllowed = allowDemo !== false;
+  const R = (recoveryData && Object.keys(recoveryData).length) ? recoveryData : (demoAllowed ? D.recovery : {});
   const activeDate = recoverySnapshot?.calendar_date
     ? new Date(`${recoverySnapshot.calendar_date}T12:00:00`)
     : new Date();
@@ -12,10 +13,20 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
   const ringClass = recoveryScore <= 2 ? 'bad' : recoveryScore <= 3 ? 'warn' : '';
   const c = 2 * Math.PI * 100;
   const bodyBatteryAtWake = R.bodyBatteryAtWake ?? null;
-  const bodyBatteryDisplay = bodyBatteryAtWake ?? R.bodyBatteryCurrent ?? R.bodyBattery ?? null;
-  const bodyBatterySub = bodyBatteryAtWake == null && bodyBatteryDisplay != null ? "huidig" : "bij ontwaken";
-  const hasRecentTraining = R.recentTrainingLoad != null || Boolean(R.hardestRecentActivity);
+  const bodyBatteryCurrent = R.bodyBatteryCurrent ?? R.bodyBattery ?? null;
+  const bodyBatteryDisplay = bodyBatteryCurrent ?? bodyBatteryAtWake ?? null;
+  const bodyBatterySub = bodyBatteryCurrent != null
+    ? 'huidig'
+    : (bodyBatteryAtWake != null ? 'bij ontwaken' : 'Geen data');
+  const recentSessions = recoverySnapshot?.recent_training?.sessions
+    || R.recentTrainingSessions
+    || [];
+  const hasRecentTraining = R.recentTrainingLoad != null || Boolean(R.hardestRecentActivity) || recentSessions.length > 0;
   const scoreBreakdown = buildRecoveryScoreBreakdown(recoveryScore, R, recoverySnapshot);
+  const stressSub = R.avgStress != null ? FCUR.stressLabel(R.avgStress) : 'Geen stressdata';
+  const stressTrend = FCUR.trendFromImpact(scoreBreakdown.impacts.stress);
+  const bodyBatteryTrend = FCUR.trendFromImpact(scoreBreakdown.impacts.bodyBattery);
+  const hrvTrendDir = FCUR.trendFromImpact(scoreBreakdown.impacts.hrv);
 
   const sourceLabel = recoverySnapshot?.source === 'live'
     ? 'Van Garmin'
@@ -133,20 +144,47 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
           sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u totaal` : "Geen slaapdata"}
           impact={scoreBreakdown.impacts.sleep} />
         <InputCard label="HRV overnacht" value={`${R.hrvOvernight ?? '–'}`} unit={R.hrvOvernight == null ? "" : "ms"}
-          sub="bij gemiddelde" impact={scoreBreakdown.impacts.hrv} trend="flat" />
-        <InputCard label="Stress (avg 24h)" value={`${R.avgStress ?? '–'}`} unit={R.avgStress == null ? "" : "/100"}
-          sub="laag-gemiddeld" impact={scoreBreakdown.impacts.stress} trend="down" />
+          sub={R.hrvBaselineMs ? `baseline ${Math.round(R.hrvBaselineMs)} ms` : 'bij gemiddelde'}
+          impact={scoreBreakdown.impacts.hrv} trend={hrvTrendDir} />
+        <InputCard label="Stress (gem. vandaag)" value={`${R.avgStress ?? '–'}`} unit={R.avgStress == null ? "" : "/100"}
+          sub={stressSub} impact={scoreBreakdown.impacts.stress} trend={stressTrend} />
         <InputCard label="Body Battery" value={`${bodyBatteryDisplay ?? '–'}`} unit={bodyBatteryDisplay == null ? "" : "%"}
-          sub={bodyBatterySub} impact={scoreBreakdown.impacts.bodyBattery} trend="up" />
+          sub={bodyBatterySub} impact={scoreBreakdown.impacts.bodyBattery} trend={bodyBatteryTrend} />
         {hasRecentTraining && (
           <InputCard label="Recente training" value={`${R.recentTrainingLoad ?? '–'}`} unit={R.recentTrainingLoad == null ? "" : "load"}
-            sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel}` : "Laatste 48 uur"}
+            sub={R.hardestRecentActivity ? `${R.hardestRecentActivity.activity_name || 'Laatste sessie'} · ${R.recentTrainingLabel || 'laatste 72 uur'}` : "Laatste 72 uur"}
             impact={scoreBreakdown.impacts.recentTraining}
             trend={(R.recentTrainingPenalty || 0) >= 0.8 ? "down" : "flat"} />
         )}
       </div>
 
       <ScoreBreakdownCard breakdown={scoreBreakdown} bodyBatteryAtWake={bodyBatteryAtWake} />
+
+      {recentSessions.length > 0 && (
+        <div className="card">
+          <div className="label" style={{ marginBottom: 12 }}>Recente sessies (72 uur)</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {recentSessions.slice(0, 3).map((session, index) => (
+              <div key={session.activity_id || index} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: 'var(--bg-soft)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 14 }}>
+                  {FCUR.sportIcon(session.activity_type)}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    {session.activity_name || FCUR.sportLabel(session.activity_type)}
+                  </div>
+                  <div className="mono" style={{ fontSize: 11, color: 'var(--ink-4)', marginTop: 2 }}>
+                    {session.duration_minutes} min · load {session.load}
+                    {session.hours_ago != null ? ` · ${session.hours_ago}u geleden` : ''}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {R.hardestRecentActivity && (
         <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -169,8 +207,8 @@ function RecoveryScreen({ recoveryScore, recoveryData, recoverySnapshot, onNavig
 
       {/* Sleep detail + HRV trend */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        <SleepBreakdown recoveryData={R} />
-        <HRVTrend recoveryData={R} />
+        <SleepBreakdown recoveryData={R} allowDemo={demoAllowed} />
+        <HRVTrend recoveryData={R} allowDemo={demoAllowed} />
       </div>
     </div>
   );
@@ -589,10 +627,12 @@ function InputCard({ label, value, unit, sub, contribution, trend, impact }) {
   );
 }
 
-function SleepBreakdown({ recoveryData }) {
+function SleepBreakdown({ recoveryData, allowDemo }) {
   const D = window.FC_DATA;
-  const R = recoveryData || D.recovery;
-  const total = R.deepSleepMin + R.remMin + R.lightMin + R.awakeMin;
+  const R = (recoveryData && Object.keys(recoveryData).length) ? recoveryData : (allowDemo ? D.recovery : {});
+  const hasSleepData = R.sleepHours != null || R.deepSleepMin != null || R.sleepScore != null;
+  const total = (R.deepSleepMin || 0) + (R.remMin || 0) + (R.lightMin || 0) + (R.awakeMin || 0);
+  const sleepInsight = FCUR.sleepStageInsight(R);
   const stages = [
     { label: 'Diep', min: R.deepSleepMin || 0, color: 'oklch(45% 0.10 250)' },
     { label: 'REM',  min: R.remMin || 0,       color: 'oklch(60% 0.16 280)' },
@@ -643,22 +683,37 @@ function SleepBreakdown({ recoveryData }) {
         ))}
       </div>
 
+      {sleepInsight && hasSleepData ? (
       <div style={{ marginTop: 20, padding: 14, background: 'var(--bg-soft)',
                     borderRadius: 12 }}>
-        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-          <b>Diepe slaap</b> 92 min is sterk — boven je gemiddelde van 78 min.
-          REM ligt op koers. <b>Awake</b> 18 min suggereert dat je rond 03:40 even wakker bent geweest.
-        </p>
+        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}
+           dangerouslySetInnerHTML={{ __html: sleepInsight }} />
       </div>
+      ) : (!hasSleepData && !allowDemo ? (
+        <div style={{ marginTop: 20, padding: 14, background: 'var(--bg-soft)', borderRadius: 12 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-4)' }}>Nog geen slaapdata van Garmin.</p>
+        </div>
+      ) : null)}
     </div>
   );
 }
 
-function HRVTrend({ recoveryData }) {
+function HRVTrend({ recoveryData, allowDemo }) {
   const D = window.FC_DATA;
-  const R = recoveryData || D.recovery;
+  const R = (recoveryData && Object.keys(recoveryData).length) ? recoveryData : (allowDemo ? D.recovery : {});
   const w = 460, h = 140, pad = 16;
-  const trend = (R.hrvTrend && R.hrvTrend.length) ? R.hrvTrend : D.recovery.hrvTrend;
+  const liveTrend = (R.hrvTrend && R.hrvTrend.length) ? R.hrvTrend : null;
+  const trend = liveTrend || (allowDemo ? D.recovery.hrvTrend : []);
+  const hrvDelta = FCUR.hrvDeltaLabel(R.hrvOvernight, R.hrvBaselineMs, R.hrvDeviationPct);
+  const hrvInsight = FCUR.hrvTrendInsight(trend);
+  if (!trend.length) {
+    return (
+      <div className="card">
+        <h2>HRV trend</h2>
+        <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-4)' }}>Nog onvoldoende HRV-historiek (min. 2 nachten).</p>
+      </div>
+    );
+  }
   const max = Math.max(...trend) + 4;
   const min = Math.min(...trend) - 4;
   const range = max - min;
@@ -678,9 +733,9 @@ function HRVTrend({ recoveryData }) {
           <div className="mono" style={{ fontSize: 24, fontWeight: 500 }}>
             {R.hrvOvernight ?? '–'}<span style={{ fontSize: 13, color: 'var(--ink-4)' }}> ms</span>
           </div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--good)',
+          <div className="mono" style={{ fontSize: 11, color: hrvDelta && String(hrvDelta).startsWith('+') ? 'var(--good)' : hrvDelta && String(hrvDelta).startsWith('-') ? 'var(--warn)' : 'var(--ink-4)',
             textTransform: 'uppercase', letterSpacing: '.12em', marginTop: 2 }}>
-            +4ms vs 7d
+            {hrvDelta || 'Geen baseline'}
           </div>
         </div>
       </div>
@@ -701,18 +756,19 @@ function HRVTrend({ recoveryData }) {
       </svg>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-        {['ma','di','wo','do','vr','za','zo'].map((d, i) => (
+        {trend.map((_, i) => (
           <span key={i} className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
-            textTransform: 'uppercase', letterSpacing: '.1em' }}>{d}</span>
+            textTransform: 'uppercase', letterSpacing: '.1em' }}>{i + 1}</span>
         ))}
       </div>
 
+      {hrvInsight && (
       <div style={{ marginTop: 16, padding: 14, background: 'var(--bg-soft)', borderRadius: 12 }}>
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-          HRV stijgt over de week heen — een teken dat je <b>autonome herstel</b> verbetert.
-          Goed moment om de intensiteit op te bouwen.
+          {hrvInsight}
         </p>
       </div>
+      )}
     </div>
   );
 }

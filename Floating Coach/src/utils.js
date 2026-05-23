@@ -33,6 +33,8 @@ window.FC_UTILS = {
     INDOOR_CYCLING: 'Indoor fietsen',
     LAP_SWIMMING: 'Zwemmen',
     CARDIO_TRAINING: 'Wandelen',
+    STRENGTH_TRAINING: 'Kracht',
+    HIIT: 'HIIT',
   })[type] || type,
   sportIcon: (type) => ({
     RUNNING: '↗',
@@ -40,6 +42,8 @@ window.FC_UTILS = {
     INDOOR_CYCLING: '◌',
     LAP_SWIMMING: '~',
     CARDIO_TRAINING: '∙',
+    STRENGTH_TRAINING: '▣',
+    HIIT: '⚡',
   })[type] || '•',
   recoveryLabel: (s) => {
     if (s <= 1) return 'Uitgeput';
@@ -56,6 +60,58 @@ window.FC_UTILS = {
     if (s === 4) return 'Klaar voor tempo of drempel.';
     if (s === 5) return 'Intervallen mogen vandaag.';
     return 'Sprints of wedstrijdsessie kan.';
+  },
+  /** Garmin stress bands: rest <26, laag 26–50, matig 51–75, hoog 76–100 */
+  stressLabel: (avgStress) => {
+    if (avgStress == null || !Number.isFinite(Number(avgStress))) return 'geen data';
+    const v = Number(avgStress);
+    if (v < 26) return 'rust';
+    if (v <= 50) return 'laag';
+    if (v <= 75) return 'matig';
+    return 'hoog';
+  },
+  trendFromImpact: (impact) => {
+    if (typeof impact !== 'number' || !Number.isFinite(impact)) return 'flat';
+    if (impact < -0.05) return 'down';
+    if (impact > 0.05) return 'up';
+    return 'flat';
+  },
+  hrvDeltaLabel: (hrv, baseline, deviationPct) => {
+    if (hrv == null || baseline == null) return null;
+    const delta = Math.round(hrv - baseline);
+    const pct = deviationPct != null ? ` (${deviationPct > 0 ? '+' : ''}${deviationPct}%)` : '';
+    const sign = delta > 0 ? '+' : '';
+    return `${sign}${delta}ms vs baseline${pct}`;
+  },
+  hrvTrendInsight: (trend) => {
+    if (!trend || trend.length < 3) return null;
+    const first = trend.slice(0, Math.ceil(trend.length / 2));
+    const second = trend.slice(Math.floor(trend.length / 2));
+    const avg = (arr) => arr.reduce((s, v) => s + v, 0) / arr.length;
+    const diff = avg(second) - avg(first);
+    if (diff >= 3) {
+      return 'HRV stijgt — autonoom herstel verbetert. Goed moment om op te bouwen.';
+    }
+    if (diff <= -3) {
+      return 'HRV daalt — let op slaap en belasting. Houd intensiteit conservatief.';
+    }
+    return 'HRV stabiel — houd je huidige trainingsritme aan.';
+  },
+  sleepStageInsight: ({ deepSleepMin, remMin, awakeMin, sleepHours }) => {
+    if (sleepHours == null && deepSleepMin == null) return null;
+    const parts = [];
+    if (deepSleepMin != null) {
+      parts.push(`<b>Diepe slaap</b> ${deepSleepMin} min${deepSleepMin >= 60 ? ' — solide' : deepSleepMin >= 45 ? '' : ' — aan de lage kant'}.`);
+    }
+    if (remMin != null) {
+      parts.push(`REM ${remMin} min.`);
+    }
+    if (awakeMin != null && awakeMin >= 15) {
+      parts.push(`<b>Awake</b> ${awakeMin} min — lichte onderbrekingen in de nacht.`);
+    } else if (awakeMin != null) {
+      parts.push(`Awake ${awakeMin} min — rustige nacht.`);
+    }
+    return parts.join(' ');
   },
   formatApiError: (message) => {
     if (!message) return 'Er ging iets mis. Probeer opnieuw.';

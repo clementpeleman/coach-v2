@@ -24,9 +24,21 @@
     SPRINT: 'Sprints',
   };
 
+  function workoutTypeFromRecovery(recoveryScore, trainingProfile) {
+    if (recoveryScore <= 2) return 'HERSTEL';
+    if (recoveryScore === 3) return 'DUUR';
+    if (recoveryScore === 4) return 'THRESHOLD';
+    if (recoveryScore >= 6 && (trainingProfile?.workout_patterns?.by_type?.SPRINT?.sessions || 0) > 0) {
+      return 'SPRINT';
+    }
+    if (recoveryScore >= 5) return 'VO2MAX';
+    return 'DUUR';
+  }
+
   function buildDraft({ recoveryScore = 4, trainingProfile = null, previous = null } = {}) {
+    const mappedType = workoutTypeFromRecovery(recoveryScore, trainingProfile);
     const rec = window.FC_DATA.recommendedByRecovery[recoveryScore] || window.FC_DATA.recommendedByRecovery[4];
-    const type = previous?.type || rec.type;
+    const type = previous?.type || mappedType || rec.type;
     const pattern = trainingProfile?.workout_patterns?.by_type?.[type];
     const sportType = previous?.sportType || pattern?.preferred_sport || sportFromRecommendation(rec.sport);
     const durationMin = previous?.durationMin || plannedDurationForSport(type, sportType, rec.duration, pattern);
@@ -39,14 +51,14 @@
     return {
       id: previous?.id || `draft-${Date.now()}`,
       status: previous?.status || 'draft',
-      source: previous?.source || 'auto',
+      source: previous?.source || 'demo',
       type,
       sportType,
       durationMin,
       preferredTargetMode: preferredTargetModeForBlocks(blocks, sportType),
       intensityPct: previous?.intensityPct || 100,
       blocks,
-      note: previous?.note || 'Gebaseerd op je herstel en sportprofiel.',
+      note: previous?.note || 'Demo-voorstel — verbind Garmin voor live coachlogica.',
       updatedAt: new Date().toISOString(),
     };
   }

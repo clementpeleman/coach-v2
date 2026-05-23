@@ -2,9 +2,10 @@
 const { useEffect: useEffectD, useState: useStateD } = React;
 const FC = window.FC_UTILS;
 
-function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onNavigate, apiStatus, userId, draftWorkout }) {
+function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onNavigate, apiStatus, userId, draftWorkout, allowDemo }) {
   const D = window.FC_DATA;
-  const R = recoveryData || D.recovery;
+  const demoAllowed = allowDemo !== false;
+  const R = (recoveryData && Object.keys(recoveryData).length) ? recoveryData : (demoAllowed ? D.recovery : {});
   const activeDate = recoverySnapshot?.calendar_date
     ? new Date(`${recoverySnapshot.calendar_date}T12:00:00`)
     : new Date();
@@ -125,7 +126,7 @@ function Dashboard({ recoveryScore, recoveryData, recoverySnapshot, weather, onN
       {/* Metric strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20 }}>
         <MetricStat label="Recovery" value={scoreNum ?? '—'} unit={scoreNum != null ? '/6' : ''} ring={scoreNum != null ? ringPct : undefined} ringClass={ringClass} />
-        <MetricStat label="Body Battery" value={R.bodyBatteryCurrent ?? R.bodyBattery ?? '–'} unit={(R.bodyBatteryCurrent ?? R.bodyBattery) == null ? '' : "%"} sub={R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen HRV data'} />
+        <MetricStat label="Body Battery" value={R.bodyBatteryCurrent ?? R.bodyBattery ?? '–'} unit={(R.bodyBatteryCurrent ?? R.bodyBattery) == null ? '' : "%"} sub={R.avgStress != null ? `Stress ${R.avgStress} · ${FC.stressLabel(R.avgStress)}` : (R.hrvOvernight ? `HRV ${R.hrvOvernight}ms` : 'Geen data')} />
         <MetricStat label="Sleep score" value={R.sleepScore ?? '–'} unit="" sub={R.sleepHours ? `${R.sleepHours.toFixed(1)}u slaap` : 'Geen slaapdata'} />
       </div>
 
@@ -309,6 +310,9 @@ function dashboardRecommendationFromDraft(draftWorkout, recoveryScore) {
 }
 
 function descriptionForDraft(draftWorkout, fallback) {
+  if (Array.isArray(draftWorkout?.reasoning) && draftWorkout.reasoning.length) {
+    return draftWorkout.reasoning[0];
+  }
   if (draftWorkout?.note && draftWorkout.source === 'coach') return draftWorkout.note;
   if (draftWorkout?.type === 'THRESHOLD') return 'Drempeltraining op basis van je huidige coachvoorstel.';
   if (draftWorkout?.type === 'DUUR') return 'Comfortabele duurtraining in zone 2.';
