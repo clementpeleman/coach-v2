@@ -2,10 +2,11 @@
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
@@ -14,6 +15,19 @@ from app.database.models import GarminActivityData, GarminHealthData
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+
+
+class ActivityAnalysisRequest(BaseModel):
+    user_id: int = Field(..., description="Internal user ID")
+    message: Optional[str] = Field(default=None, description="Natural language analysis request")
+    intent: Optional[str] = Field(default=None, description="Structured analysis intent")
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    compare_start_date: Optional[str] = None
+    compare_end_date: Optional[str] = None
+    sport: Optional[str] = None
+    bucket: Optional[str] = None
+    last_context: Optional[dict[str, Any]] = None
 
 
 def _parse_raw(activity: GarminActivityData) -> dict:
@@ -208,6 +222,39 @@ def _health_summary(health_data: List[GarminHealthData]) -> Optional[Dict]:
         "min_resting_hr": min(resting_hrs) if resting_hrs else None,
         "max_resting_hr": max(resting_hrs) if resting_hrs else None,
     }
+
+
+@router.post("/activity")
+async def activity_analysis(
+    payload: ActivityAnalysisRequest,
+    db: Session = Depends(get_db),
+):
+    """Return a chart-ready activity analysis from a structured or natural-language request."""
+    from app.tools.activity_analysis import (
+        build_activity_analysis,
+        detect_activity_analysis_request,
+    )
+
+    request: Optional[dict[str, Any]] = None
+    if payload.message:
+        request = detect_activity_analysis_request(payload.message, payload.last_context)
+    if request is None and payload.intent:
+        request = {
+            "intent": payload.intent,
+            "message": payload.message,
+            "sport": payload.sport,
+            "start_date": payload.start_date,
+            "end_date": payload.end_date,
+            "compare_start_date": payload.compare_start_date,
+            "compare_end_date": payload.compare_end_date,
+            "bucket": payload.bucket,
+        }
+    if request is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Geen ondersteunde activiteitenanalyse herkend.",
+        )
+    return build_activity_analysis(db, payload.user_id, request)
 
 
 @router.get("/profile")

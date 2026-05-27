@@ -286,7 +286,17 @@ export async function sendChatMessage(payload: {
   userId: number;
   message: string;
   history: Array<{ role: "user" | "assistant"; content: string }>;
-}): Promise<{ reply: string }> {
+  context?: Record<string, unknown>;
+}): Promise<{
+  reply: string;
+  analysis_result?: {
+    title?: string;
+    summary?: string;
+    metrics?: Array<{ label: string; value: string | number | null; unit?: string }>;
+    confidence?: { level?: string; label?: string };
+    coverage?: { sessions?: number };
+  };
+}> {
   const response = await fetch(`${API_URL}/web/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -294,6 +304,7 @@ export async function sendChatMessage(payload: {
       user_id: payload.userId,
       message: payload.message,
       history: payload.history,
+      context: payload.context ?? null,
     }),
   });
 

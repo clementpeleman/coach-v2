@@ -251,6 +251,7 @@ function App() {
     dashboard:  { label: 'Vandaag',      ico: '◆', Comp: window.Dashboard },
     workout:    { label: 'Training',     ico: '▶', Comp: window.WorkoutScreen },
     activities: { label: 'Activiteiten', ico: '≡', Comp: window.ActivitiesScreen },
+    chat:       { label: 'Coach',        ico: '○', Comp: window.ChatScreen },
     profiel:    { label: 'Profiel',      ico: '◎', Comp: window.ProfileScreen },
   };
 
@@ -401,7 +402,8 @@ function App() {
                           messages={chatMessages}
                           setMessages={setChatMessages}
                           thinking={chatThinking}
-                          setThinking={setChatThinking} />
+                          setThinking={setChatThinking}
+                          onNavigateChat={() => setScreen('chat')} />
     </>
   );
 }
@@ -418,6 +420,7 @@ function readStoredChat(key) {
           content: m.content,
           time: m.time || '',
           source: m.source,
+          analysis_result: m.analysis_result || m.analysis || null,
         }));
     }
   } catch (_) {}

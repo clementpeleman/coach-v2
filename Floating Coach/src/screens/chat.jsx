@@ -64,6 +64,9 @@ function ChatScreen({
     setDraft('');
     setThinking(true);
     setLastError(null);
+    const lastAnalysisContext = [...(messages || [])]
+      .reverse()
+      .find((message) => message.analysis_result?.context)?.analysis_result?.context || null;
 
     // Live path: call /web/chat if API is online + user is logged in.
     if (online && userId) {
@@ -99,6 +102,7 @@ function ChatScreen({
             training_profile: trainingProfile || null,
             workout_patterns: trainingProfile?.workout_patterns || null,
             draft_workout: draftUpdate?.draft || contextDraft || null,
+            last_analysis_context: lastAnalysisContext,
           },
         });
         if (res.draft_workout) {
@@ -107,6 +111,7 @@ function ChatScreen({
         setMessages((m) => [...m, {
           role: 'assistant', content: res.reply,
           time: FCU.fmtTime(new Date().toISOString()), source: 'live',
+          analysis_result: res.analysis_result || null,
         }]);
       } catch (e) {
         setLastError(FCU.formatApiError(e.message));
@@ -184,7 +189,7 @@ function ChatScreen({
           flex: 1, padding: '32px 28px', display: 'flex', flexDirection: 'column', gap: 18,
         }}>
           {messages.map((m, i) => (
-            <BigBubble key={i} m={m} />
+            <BigBubble key={i} m={m} onSend={send} />
           ))}
           {lastError && (
             <div className="mono" style={{ fontSize: 11, color: 'var(--bad)',
@@ -263,7 +268,7 @@ function ChatScreen({
 
         <div className="card tight">
           <div className="label" style={{ marginBottom: 12 }}>Coach toolkit</div>
-          {['Genereer workout', 'Analyseer trainingsweek', 'Herstel check', 'Vergelijk activiteiten', 'Plan een wedstrijd'].map((t) => (
+          {['Genereer workout', 'Analyseer trainingsweek', 'Vergelijk 30 dagen', 'Tempo vs hartslag', 'Workoutpatronen'].map((t) => (
             <div key={t} style={{
               padding: '10px 12px', borderRadius: 8, fontSize: 13,
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -448,23 +453,256 @@ function ContextRow({ k, v }) {
   );
 }
 
-function BigBubble({ m }) {
+function BigBubble({ m, onSend }) {
   const isUser = m.role === 'user';
+  const analysis = m.analysis_result || m.analysis || null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
                   alignItems: isUser ? 'flex-end' : 'flex-start', gap: 6,
-                  maxWidth: '78%', alignSelf: isUser ? 'flex-end' : 'flex-start' }}>
+                  maxWidth: analysis ? '100%' : '78%', alignSelf: isUser ? 'flex-end' : 'flex-start' }}>
       <div style={{
         background: isUser ? 'var(--ink)' : 'var(--bg-soft)',
         color: isUser ? 'var(--text-on-dark)' : 'var(--ink)',
         padding: '14px 18px',
         borderRadius: isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
         fontSize: 15, lineHeight: 1.55,
+        maxWidth: analysis ? 680 : '100%',
       }} dangerouslySetInnerHTML={{ __html: m.content }} />
+      {!isUser && analysis && <AnalysisCard result={analysis} onSend={onSend} />}
       <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
                                       letterSpacing: '.1em', textTransform: 'uppercase' }}>
         {isUser ? 'Jij' : 'Coach'} · {m.time}
       </div>
+    </div>
+  );
+}
+
+function AnalysisCard({ result, onSend }) {
+  const chart = result.chart || null;
+  const metrics = Array.isArray(result.metrics) ? result.metrics : [];
+  const confidence = result.confidence || {};
+  const coverage = result.coverage || {};
+  const suggestions = Array.isArray(result.follow_up_suggestions) ? result.follow_up_suggestions.slice(0, 3) : [];
+  return (
+    <div className="card tight" style={{
+      width: 'min(760px, 100%)',
+      borderColor: 'var(--line)',
+      background: 'var(--surface)',
+      boxShadow: '0 14px 42px color-mix(in oklab, var(--ink) 7%, transparent)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 14 }}>
+        <div style={{ minWidth: 0 }}>
+          <div className="label" style={{ marginBottom: 8 }}>Activiteitenanalyse</div>
+          <h2 style={{ fontSize: 22, lineHeight: 1.1, marginBottom: 6 }}>{result.title || 'Analyse'}</h2>
+          <p style={{ margin: 0, color: 'var(--ink-3)', lineHeight: 1.45, fontSize: 13 }}>
+            {result.summary}
+          </p>
+        </div>
+        <span className="tag" style={{
+          flexShrink: 0,
+          background: confidence.level === 'high' ? 'oklch(92% 0.16 145)' : confidence.level === 'medium' ? 'oklch(94% 0.10 95)' : 'var(--bg-soft)',
+          color: 'var(--ink)',
+        }}>
+          {confidence.label || confidence.level || 'indicatief'}
+        </span>
+      </div>
+
+      {metrics.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))', gap: 8, marginTop: 18 }}>
+          {metrics.slice(0, 4).map((metric, index) => (
+            <div key={`${metric.label}-${index}`} style={{ background: 'var(--bg-soft)', borderRadius: 8, padding: '11px 12px', minWidth: 0 }}>
+              <div className="mono" style={{ fontSize: 9, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em' }}>
+                {metric.label}
+              </div>
+              <div style={{ marginTop: 5, fontSize: 20, fontWeight: 650, lineHeight: 1 }}>
+                {metric.value ?? '-'}{metric.unit ? <span style={{ fontSize: 12, color: 'var(--ink-3)', marginLeft: 4 }}>{metric.unit}</span> : null}
+              </div>
+              {metric.delta_percent != null && (
+                <div className="mono" style={{ marginTop: 6, fontSize: 10, color: Number(metric.delta_percent) >= 0 ? 'var(--good)' : 'var(--bad)' }}>
+                  {Number(metric.delta_percent) >= 0 ? '+' : ''}{metric.delta_percent}%
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {chart && (
+        <div style={{ marginTop: 18, padding: 14, border: '1px solid var(--line)', borderRadius: 10, background: 'white' }}>
+          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 10 }}>
+            {chart.title || 'Grafiek'}
+          </div>
+          <AnalysisChart chart={chart} />
+        </div>
+      )}
+
+      {result.table && <AnalysisTable table={result.table} />}
+
+      <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em' }}>
+          {coverage.sessions ?? 0} sessies · HR dekking {Math.round((coverage.hr_coverage || 0) * 100)}%
+        </div>
+        {suggestions.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {suggestions.map((suggestion) => (
+              <button key={suggestion} onClick={() => onSend?.(suggestion)}
+                className="tag"
+                style={{ border: '1px solid var(--line)', background: 'transparent', cursor: 'pointer' }}>
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {Array.isArray(confidence.notes) && confidence.notes.length > 0 && (
+        <p style={{ margin: '10px 0 0', color: 'var(--ink-4)', fontSize: 12, lineHeight: 1.4 }}>
+          {confidence.notes[0]}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AnalysisChart({ chart }) {
+  if (chart.type === 'scatter') return <ScatterChart chart={chart} />;
+  if (chart.type === 'bar') return <BarChart chart={chart} />;
+  return <LineChart chart={chart} />;
+}
+
+function LineChart({ chart }) {
+  const series = (chart.series || []).filter((item) => Array.isArray(item.values));
+  const primary = series[0] || { values: [] };
+  const values = primary.values.map(Number).filter((value) => Number.isFinite(value));
+  if (!values.length) return <EmptyChart />;
+  const min = Math.min(0, ...values);
+  const max = Math.max(...values, min + 1);
+  const w = 640;
+  const h = 180;
+  const pad = 18;
+  const points = values.map((value, index) => {
+    const x = pad + (index / Math.max(1, values.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((value - min) / Math.max(1, max - min)) * (h - pad * 2);
+    return [x, y];
+  });
+  const path = points.map((point, index) => `${index ? 'L' : 'M'}${point[0]},${point[1]}`).join(' ');
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 180, display: 'block' }} role="img" aria-label={chart.title || 'lijn grafiek'}>
+        <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="var(--line-strong)" />
+        <path d={path} fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point, index) => (
+          <circle key={index} cx={point[0]} cy={point[1]} r="4" fill="var(--ink)" stroke="var(--accent)" strokeWidth="2" />
+        ))}
+      </svg>
+      <ChartLegend labels={chart.x || []} />
+    </div>
+  );
+}
+
+function BarChart({ chart }) {
+  const series = (chart.series || []).filter((item) => Array.isArray(item.values));
+  const primary = series[0] || { values: [] };
+  const values = primary.values.map(Number).filter((value) => Number.isFinite(value));
+  if (!values.length) return <EmptyChart />;
+  const max = Math.max(...values, 1);
+  return (
+    <div>
+      <div style={{ height: 180, display: 'grid', gridTemplateColumns: `repeat(${values.length}, minmax(28px, 1fr))`, gap: 8, alignItems: 'end' }}>
+        {values.map((value, index) => (
+          <div key={index} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 6, minWidth: 0 }}>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{value}</div>
+            <div style={{
+              width: '100%',
+              height: `${Math.max(7, (value / max) * 138)}px`,
+              background: index % 2 ? 'color-mix(in oklab, var(--accent) 64%, var(--ink))' : 'var(--accent)',
+              borderRadius: '5px 5px 2px 2px',
+            }} />
+          </div>
+        ))}
+      </div>
+      <ChartLegend labels={chart.x || []} />
+    </div>
+  );
+}
+
+function ScatterChart({ chart }) {
+  const points = (chart.points || [])
+    .map((point) => ({ ...point, x: Number(point.x), y: Number(point.y) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (!points.length) return <EmptyChart />;
+  const w = 640;
+  const h = 190;
+  const pad = 24;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 190, display: 'block' }} role="img" aria-label={chart.title || 'scatter grafiek'}>
+      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="var(--line-strong)" />
+      <line x1={pad} y1={pad} x2={pad} y2={h - pad} stroke="var(--line-strong)" />
+      {points.map((point, index) => {
+        const x = pad + ((point.x - minX) / Math.max(1, maxX - minX)) * (w - pad * 2);
+        const y = h - pad - ((point.y - minY) / Math.max(1, maxY - minY)) * (h - pad * 2);
+        return <circle key={index} cx={x} cy={y} r="5" fill="var(--accent)" stroke="var(--ink)" strokeWidth="1.5"><title>{point.label}</title></circle>;
+      })}
+    </svg>
+  );
+}
+
+function ChartLegend({ labels }) {
+  const shown = (labels || []).filter(Boolean);
+  if (!shown.length) return null;
+  const picks = shown.length > 6 ? [shown[0], shown[Math.floor(shown.length / 2)], shown[shown.length - 1]] : shown;
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 8 }}>
+      {picks.map((label, index) => (
+        <span key={`${label}-${index}`} className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.08em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function EmptyChart() {
+  return (
+    <div style={{ height: 150, borderRadius: 10, background: 'var(--bg-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-4)', fontSize: 13 }}>
+      Te weinig data voor een grafiek.
+    </div>
+  );
+}
+
+function AnalysisTable({ table }) {
+  const columns = Array.isArray(table.columns) ? table.columns : [];
+  const rows = Array.isArray(table.rows) ? table.rows : [];
+  if (!columns.length || !rows.length) return null;
+  return (
+    <div style={{ marginTop: 16, overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column} className="mono" style={{ textAlign: 'left', color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.1em', fontSize: 9, padding: '0 10px 8px 0', borderBottom: '1px solid var(--line)' }}>
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 8).map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {(Array.isArray(row) ? row : []).map((cell, cellIndex) => (
+                <td key={cellIndex} style={{ padding: '8px 10px 8px 0', borderBottom: '1px solid var(--line)', color: cellIndex === 2 ? 'var(--ink-4)' : 'var(--ink)' }}>
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -1,0 +1,855 @@
+"""Structured activity analyses for coach chat and UI chart cards."""
+from __future__ import annotations
+
+import json
+import math
+import uuid
+from collections import defaultdict
+from datetime import date, datetime, time, timedelta
+from html import escape
+from typing import Any, Optional
+
+from sqlalchemy.orm import Session
+
+from app.database.models import GarminActivityAuxiliaryData, GarminActivityData
+
+MAX_ANALYSIS_DAYS = 365
+DEFAULT_TREND_DAYS = 84
+DEFAULT_RECENT_DAYS = 30
+DEFAULT_PATTERN_DAYS = 120
+
+SPORT_ALIASES = {
+    "RUNNING": ("run", "running", "hardloop", "hardlopen", "lopen", "loop", "jog"),
+    "CYCLING": ("fiets", "fietsen", "cycling", "ride", "rit", "wielren", "bike"),
+    "INDOOR_CYCLING": ("zwift", "indoor fiets", "indoor cycling", "trainer"),
+    "SWIMMING": ("zwem", "zwemmen", "swim", "swimming", "baantjes"),
+    "WALKING": ("wandel", "wandelen", "walk", "walking"),
+}
+
+SPORT_LABELS = {
+    "RUNNING": "Hardlopen",
+    "CYCLING": "Fietsen",
+    "INDOOR_CYCLING": "Indoor fietsen",
+    "SWIMMING": "Zwemmen",
+    "WALKING": "Wandelen",
+    "OTHER": "Overig",
+}
+
+
+def detect_activity_analysis_request(
+    message: str,
+    last_context: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
+    """Return a bounded structured analysis request for activity-analysis questions."""
+    text = (message or "").strip().lower()
+    if not text:
+        return None
+
+    sport = _detect_sport(text)
+    today = date.today()
+
+    follow_up = _looks_like_analysis_follow_up(text)
+    if follow_up and last_context:
+        request = dict(last_context)
+        request["message"] = message
+        if sport:
+            request["sport"] = sport
+        if "grafiek" in text or "chart" in text:
+            request["wants_chart"] = True
+        return _coerce_request(request, today=today)
+
+    intent = _detect_intent(text)
+    if not intent:
+        return None
+    if intent == "sport_breakdown":
+        sport = None
+
+    period = _detect_period(text, intent, today)
+    return _coerce_request(
+        {
+            "intent": intent,
+            "message": message,
+            "sport": sport,
+            "start_date": period["start_date"].isoformat(),
+            "end_date": period["end_date"].isoformat(),
+            "bucket": period.get("bucket"),
+            "compare_start_date": period.get("compare_start_date").isoformat()
+            if period.get("compare_start_date")
+            else None,
+            "compare_end_date": period.get("compare_end_date").isoformat()
+            if period.get("compare_end_date")
+            else None,
+        },
+        today=today,
+    )
+
+
+def build_activity_analysis(
+    db: Session,
+    user_id: int,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a chart-ready, read-only activity analysis for one user."""
+    normalized = _coerce_request(request, today=date.today())
+    start_dt = _date_start(normalized["start_date"])
+    end_dt = _date_end(normalized["end_date"])
+    compare_start = _date_start(normalized["compare_start_date"]) if normalized.get("compare_start_date") else None
+    compare_end = _date_end(normalized["compare_end_date"]) if normalized.get("compare_end_date") else None
+
+    query_start = compare_start or start_dt
+    activities = _load_activities(db, user_id, query_start, end_dt, normalized.get("sport"))
+    rows = [_activity_row(activity) for activity in activities]
+    current_rows = [row for row in rows if start_dt <= row["start_time"] <= end_dt]
+    compare_rows = [
+        row for row in rows if compare_start and compare_end and compare_start <= row["start_time"] <= compare_end
+    ]
+
+    intent = normalized["intent"]
+    if intent == "compare_periods":
+        result = _compare_periods(current_rows, compare_rows, normalized)
+    elif intent == "sport_breakdown":
+        result = _sport_breakdown(current_rows, normalized)
+    elif intent == "pace_hr_correlation":
+        result = _pace_hr_correlation(current_rows, normalized)
+    elif intent == "personal_records":
+        result = _personal_records(current_rows, normalized)
+    elif intent == "workout_pattern_analysis":
+        details = _load_activity_details(db, user_id, start_dt, end_dt, normalized.get("sport"))
+        result = _workout_patterns(activities, details, normalized)
+    else:
+        result = _activity_trend(current_rows, normalized)
+
+    result["analysis_id"] = result.get("analysis_id") or f"ana-{uuid.uuid4().hex[:10]}"
+    result["context"] = normalized
+    result["coverage"] = _coverage(rows, current_rows, normalized, compare_rows=compare_rows)
+    result["confidence"] = _confidence(result["coverage"], intent)
+    result["follow_up_suggestions"] = _follow_up_suggestions(intent, normalized)
+    return result
+
+
+def build_activity_analysis_reply(result: dict[str, Any]) -> str:
+    """Make a compact HTML reply that points at the structured card."""
+    title = escape(str(result.get("title") or "Activiteitenanalyse"))
+    summary = escape(str(result.get("summary") or "Ik heb je activiteiten geanalyseerd."))
+    confidence = result.get("confidence") or {}
+    level = escape(str(confidence.get("level") or "low"))
+    coverage = result.get("coverage") or {}
+    sessions = coverage.get("sessions", 0)
+    period = result.get("context") or {}
+    start = escape(str(period.get("start_date") or "?"))
+    end = escape(str(period.get("end_date") or "?"))
+    return (
+        f"<b>{title}</b><br/>"
+        f"{summary}<br/><br/>"
+        f"<i>Ik heb er een grafiekkaart bij gezet. Datadekking: {sessions} sessies, "
+        f"{start} tot {end}, vertrouwen {level}.</i>"
+    )
+
+
+def _detect_intent(text: str) -> Optional[str]:
+    analysis_words = (
+        "analyse", "analyseer", "grafiek", "chart", "toon", "bekijk", "hoe was",
+        "activiteiten", "activiteit", "trainingen", "trainingsweek", "week",
+        "trend", "evolutie", "vergelijk", "record", "records", "patroon", "patronen",
+        "correlatie", "effici", "hartslag", "tempo", "pace", "snelheid",
+        "afstand", "volume", "belasting", "progressie",
+    )
+    if not any(word in text for word in analysis_words):
+        return None
+    if any(word in text for word in ("sportverdeling", "verdeling", "per sport", "loop vs fiets", "fietsen vs lopen")):
+        return "sport_breakdown"
+    if any(word in text for word in ("correlatie", "effici", "hartslag", "bpm", "pace", "tempo", "snelheid")):
+        return "pace_hr_correlation"
+    if any(word in text for word in ("vergelijk", "versus", " vs ", "tegenover", "verschil")):
+        if ("loop" in text or "lopen" in text or "hardloop" in text) and ("fiets" in text or "fietsen" in text):
+            return "sport_breakdown"
+        return "compare_periods"
+    if any(word in text for word in ("record", "records", "langste", "snelste", "beste", "zwaarste", "top")):
+        return "personal_records"
+    if any(word in text for word in ("patroon", "patronen", "vaak", "typisch", "type workout", "workouttype")):
+        return "workout_pattern_analysis"
+    if any(word in text for word in ("trend", "evolutie", "per week", "per maand", "volume", "afstand")):
+        return "activity_trend"
+    if any(word in text for word in ("analyse", "analyseer", "trainingsweek", "week", "activiteiten", "trainingen")):
+        return "activity_trend"
+    return None
+
+
+def _looks_like_analysis_follow_up(text: str) -> bool:
+    phrases = (
+        "en", "ook", "zelfde", "die", "daarvan", "maak", "toon", "filter",
+        "alleen", "zonder", "meer detail", "per week", "per maand", "grafiek",
+    )
+    return len(text) < 80 and any(phrase in text for phrase in phrases)
+
+
+def _detect_sport(text: str) -> Optional[str]:
+    for sport, aliases in SPORT_ALIASES.items():
+        if any(alias in text for alias in aliases):
+            return sport
+    return None
+
+
+def _detect_period(text: str, intent: str, today: date) -> dict[str, Any]:
+    if intent == "personal_records":
+        days = MAX_ANALYSIS_DAYS
+    elif intent == "workout_pattern_analysis":
+        days = DEFAULT_PATTERN_DAYS
+    elif intent == "activity_trend":
+        days = DEFAULT_TREND_DAYS
+    else:
+        days = DEFAULT_RECENT_DAYS
+
+    number_days = _parse_days(text)
+    if number_days:
+        days = number_days
+
+    if "deze week" in text or "huidige week" in text or "mijn week" in text or "trainingsweek" in text:
+        start = today - timedelta(days=today.weekday())
+        end = today
+        if intent == "compare_periods":
+            prev_end = start - timedelta(days=1)
+            prev_start = prev_end - timedelta(days=6)
+            return {
+                "start_date": start,
+                "end_date": end,
+                "compare_start_date": prev_start,
+                "compare_end_date": prev_end,
+                "bucket": "day",
+            }
+        return {"start_date": start, "end_date": end, "bucket": "day"}
+
+    if "vorige week" in text:
+        current_start = today - timedelta(days=today.weekday())
+        start = current_start - timedelta(days=7)
+        end = current_start - timedelta(days=1)
+        return {"start_date": start, "end_date": end, "bucket": "day"}
+
+    if "deze maand" in text or "huidige maand" in text:
+        start = today.replace(day=1)
+        end = today
+        if intent == "compare_periods":
+            prev_end = start - timedelta(days=1)
+            prev_start = prev_end.replace(day=1)
+            return {
+                "start_date": start,
+                "end_date": end,
+                "compare_start_date": prev_start,
+                "compare_end_date": prev_end,
+                "bucket": "week",
+            }
+        return {"start_date": start, "end_date": end, "bucket": "week"}
+
+    if "vorige maand" in text:
+        first_this_month = today.replace(day=1)
+        prev_end = first_this_month - timedelta(days=1)
+        prev_start = prev_end.replace(day=1)
+        return {"start_date": prev_start, "end_date": prev_end, "bucket": "week"}
+
+    days = min(max(days, 1), MAX_ANALYSIS_DAYS)
+    start = today - timedelta(days=days - 1)
+    end = today
+    bucket = "week" if days > 21 else "day"
+    period = {"start_date": start, "end_date": end, "bucket": bucket}
+    if intent == "compare_periods":
+        period["compare_end_date"] = start - timedelta(days=1)
+        period["compare_start_date"] = period["compare_end_date"] - timedelta(days=days - 1)
+    return period
+
+
+def _parse_days(text: str) -> Optional[int]:
+    import re
+
+    match = re.search(r"\b(\d{1,3})\s*(dagen|days|d)\b", text)
+    if match:
+        return int(match.group(1))
+    if "30d" in text or "30 d" in text:
+        return 30
+    if "7d" in text or "7 d" in text:
+        return 7
+    if "90d" in text or "90 d" in text:
+        return 90
+    return None
+
+
+def _coerce_request(request: dict[str, Any], today: date) -> dict[str, Any]:
+    intent = request.get("intent") or "activity_trend"
+    start = _parse_date(request.get("start_date")) or (today - timedelta(days=DEFAULT_RECENT_DAYS - 1))
+    end = _parse_date(request.get("end_date")) or today
+    if start > end:
+        start, end = end, start
+    if (end - start).days + 1 > MAX_ANALYSIS_DAYS:
+        start = end - timedelta(days=MAX_ANALYSIS_DAYS - 1)
+    if intent == "compare_periods" and ((end - start).days + 1) * 2 > MAX_ANALYSIS_DAYS:
+        start = end - timedelta(days=(MAX_ANALYSIS_DAYS // 2) - 1)
+
+    compare_start = _parse_date(request.get("compare_start_date"))
+    compare_end = _parse_date(request.get("compare_end_date"))
+    if intent == "compare_periods" and (not compare_start or not compare_end):
+        days = (end - start).days + 1
+        compare_end = start - timedelta(days=1)
+        compare_start = compare_end - timedelta(days=days - 1)
+    if intent == "compare_periods" and compare_start and (end - compare_start).days + 1 > MAX_ANALYSIS_DAYS:
+        days = (end - start).days + 1
+        compare_end = start - timedelta(days=1)
+        compare_start = max(compare_end - timedelta(days=days - 1), end - timedelta(days=MAX_ANALYSIS_DAYS - 1))
+
+    return {
+        "intent": intent,
+        "message": request.get("message"),
+        "sport": request.get("sport"),
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "compare_start_date": compare_start.isoformat() if compare_start else None,
+        "compare_end_date": compare_end.isoformat() if compare_end else None,
+        "bucket": request.get("bucket") or ("week" if (end - start).days > 21 else "day"),
+    }
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value[:10]).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _date_start(value: str) -> datetime:
+    return datetime.combine(_parse_date(value) or date.today(), time.min)
+
+
+def _date_end(value: str) -> datetime:
+    return datetime.combine(_parse_date(value) or date.today(), time.max)
+
+
+def _load_activities(
+    db: Session,
+    user_id: int,
+    start: datetime,
+    end: datetime,
+    sport: Optional[str],
+) -> list[GarminActivityData]:
+    query = (
+        db.query(GarminActivityData)
+        .filter(GarminActivityData.user_id == user_id)
+        .filter(GarminActivityData.start_time >= start)
+        .filter(GarminActivityData.start_time <= end)
+        .order_by(GarminActivityData.start_time.asc())
+    )
+    activities = query.all()
+    if not sport:
+        return activities
+    return [activity for activity in activities if _normalize_sport(activity) == sport]
+
+
+def _load_activity_details(
+    db: Session,
+    user_id: int,
+    start: datetime,
+    end: datetime,
+    _sport: Optional[str],
+) -> list[GarminActivityAuxiliaryData]:
+    query = (
+        db.query(GarminActivityAuxiliaryData)
+        .filter(GarminActivityAuxiliaryData.user_id == user_id)
+        .filter(GarminActivityAuxiliaryData.summary_type == "activityDetails")
+        .filter(GarminActivityAuxiliaryData.start_time >= start)
+        .filter(GarminActivityAuxiliaryData.start_time <= end)
+        .order_by(GarminActivityAuxiliaryData.start_time.asc())
+    )
+    return query.all()
+
+
+def _activity_row(activity: GarminActivityData) -> dict[str, Any]:
+    duration_seconds = int(activity.duration or 0)
+    distance_meters = float(activity.distance or 0)
+    distance_km = distance_meters / 1000 if distance_meters else 0
+    duration_hours = duration_seconds / 3600 if duration_seconds else 0
+    avg_hr = activity.average_heart_rate
+    speed_kmh = (distance_km / duration_hours) if duration_hours and distance_km else None
+    pace_min_km = (duration_seconds / 60 / distance_km) if distance_km else None
+    return {
+        "id": activity.id,
+        "summary_id": activity.summary_id,
+        "activity_id": activity.activity_id,
+        "name": activity.activity_name or _sport_label(_normalize_sport(activity)),
+        "sport": _normalize_sport(activity),
+        "start_time": activity.start_time,
+        "date": activity.start_time.date().isoformat() if activity.start_time else None,
+        "duration_seconds": duration_seconds,
+        "duration_hours": duration_hours,
+        "duration_min": duration_seconds / 60 if duration_seconds else 0,
+        "distance_km": distance_km,
+        "calories": activity.calories or 0,
+        "avg_hr": avg_hr,
+        "max_hr": activity.max_heart_rate,
+        "speed_kmh": speed_kmh,
+        "pace_min_km": pace_min_km,
+        "load": _rough_load(duration_seconds, avg_hr, activity.max_heart_rate),
+    }
+
+
+def _raw_payload(row: Any) -> dict[str, Any]:
+    raw = getattr(row, "data", None)
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _normalize_sport(activity: GarminActivityData) -> str:
+    try:
+        from app.api.garmin import normalize_training_sport
+
+        return normalize_training_sport(activity)
+    except Exception:
+        return _normalize_raw_sport(_raw_payload(activity), fallback=activity.activity_type)
+
+
+def _normalize_raw_sport(raw: dict[str, Any], fallback: Optional[str] = None) -> str:
+    value = str(raw.get("activityType") or raw.get("summaryType") or fallback or "").upper()
+    if "RUN" in value:
+        return "RUNNING"
+    if "INDOOR" in value and ("CYCL" in value or "BIK" in value):
+        return "INDOOR_CYCLING"
+    if "CYCL" in value or "BIK" in value:
+        return "CYCLING"
+    if "SWIM" in value:
+        return "SWIMMING"
+    if "WALK" in value or "HIKE" in value:
+        return "WALKING"
+    return "OTHER"
+
+
+def _rough_load(duration_seconds: int, avg_hr: Optional[int], max_hr: Optional[int]) -> float:
+    minutes = duration_seconds / 60
+    if not minutes:
+        return 0
+    if avg_hr and max_hr:
+        intensity = max(0.45, min(1.15, avg_hr / max(max_hr, 1)))
+    elif avg_hr:
+        intensity = max(0.45, min(1.05, avg_hr / 190))
+    else:
+        intensity = 0.65
+    return round(minutes * (intensity ** 2), 1)
+
+
+def _activity_trend(rows: list[dict[str, Any]], request: dict[str, Any]) -> dict[str, Any]:
+    bucket = request.get("bucket") or "week"
+    grouped = _group_rows(rows, bucket)
+    labels = list(grouped.keys())
+    sessions = [item["sessions"] for item in grouped.values()]
+    distance = [round(item["distance_km"], 1) for item in grouped.values()]
+    duration = [round(item["duration_hours"], 1) for item in grouped.values()]
+    totals = _totals(rows)
+    sport_part = f" voor {_sport_label(request.get('sport'))}" if request.get("sport") else ""
+    return {
+        "intent": "activity_trend",
+        "title": f"Activiteitstrend{sport_part}",
+        "summary": (
+            f"{totals['sessions']} sessies, {totals['distance_km']:.1f} km en "
+            f"{totals['duration_hours']:.1f} uur in deze periode."
+        ),
+        "metrics": _metric_tiles(totals),
+        "chart": {
+            "type": "line",
+            "title": "Volume per " + ("week" if bucket == "week" else "dag"),
+            "x": labels,
+            "series": [
+                {"label": "Afstand km", "unit": "km", "values": distance},
+                {"label": "Duur uren", "unit": "u", "values": duration},
+                {"label": "Sessies", "unit": "", "values": sessions},
+            ],
+        },
+        "table": _activity_table(rows[-8:]),
+    }
+
+
+def _compare_periods(
+    current_rows: list[dict[str, Any]],
+    compare_rows: list[dict[str, Any]],
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    current = _totals(current_rows)
+    previous = _totals(compare_rows)
+    deltas = {
+        "sessions": _pct_delta(current["sessions"], previous["sessions"]),
+        "distance_km": _pct_delta(current["distance_km"], previous["distance_km"]),
+        "duration_hours": _pct_delta(current["duration_hours"], previous["duration_hours"]),
+        "load": _pct_delta(current["load"], previous["load"]),
+    }
+    distance_delta = deltas["distance_km"]
+    direction = _delta_word(distance_delta)
+    return {
+        "intent": "compare_periods",
+        "title": "Periodevergelijking",
+        "summary": (
+            f"Deze periode is je afstand {direction} "
+            f"({current['distance_km']:.1f} km vs {previous['distance_km']:.1f} km)."
+        ),
+        "metrics": [
+            {"label": "Sessies", "value": current["sessions"], "compare": previous["sessions"], "delta_percent": deltas["sessions"]},
+            {"label": "Afstand", "value": round(current["distance_km"], 1), "unit": "km", "compare": round(previous["distance_km"], 1), "delta_percent": deltas["distance_km"]},
+            {"label": "Duur", "value": round(current["duration_hours"], 1), "unit": "u", "compare": round(previous["duration_hours"], 1), "delta_percent": deltas["duration_hours"]},
+            {"label": "Load", "value": round(current["load"], 1), "compare": round(previous["load"], 1), "delta_percent": deltas["load"]},
+        ],
+        "chart": {
+            "type": "bar",
+            "title": "Huidig vs vorige periode",
+            "x": ["Vorige", "Huidige"],
+            "series": [
+                {"label": "Afstand km", "unit": "km", "values": [round(previous["distance_km"], 1), round(current["distance_km"], 1)]},
+                {"label": "Duur uren", "unit": "u", "values": [round(previous["duration_hours"], 1), round(current["duration_hours"], 1)]},
+                {"label": "Load", "unit": "", "values": [round(previous["load"], 1), round(current["load"], 1)]},
+            ],
+        },
+        "table": {
+            "columns": ["Metric", "Vorige", "Huidige", "Delta"],
+            "rows": [
+                ["Sessies", previous["sessions"], current["sessions"], _format_delta(deltas["sessions"])],
+                ["Afstand", f"{previous['distance_km']:.1f} km", f"{current['distance_km']:.1f} km", _format_delta(deltas["distance_km"])],
+                ["Duur", f"{previous['duration_hours']:.1f} u", f"{current['duration_hours']:.1f} u", _format_delta(deltas["duration_hours"])],
+                ["Load", f"{previous['load']:.1f}", f"{current['load']:.1f}", _format_delta(deltas["load"])],
+            ],
+        },
+    }
+
+
+def _sport_breakdown(rows: list[dict[str, Any]], request: dict[str, Any]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, float]] = defaultdict(lambda: {"sessions": 0, "distance_km": 0, "duration_hours": 0})
+    for row in rows:
+        item = grouped[row["sport"]]
+        item["sessions"] += 1
+        item["distance_km"] += row["distance_km"]
+        item["duration_hours"] += row["duration_hours"]
+    items = sorted(grouped.items(), key=lambda item: item[1]["duration_hours"], reverse=True)
+    labels = [_sport_label(sport) for sport, _ in items]
+    totals = _totals(rows)
+    top = labels[0] if labels else "geen sport"
+    return {
+        "intent": "sport_breakdown",
+        "title": "Sportverdeling",
+        "summary": f"Je meeste trainingstijd ging naar {top}. Totaal: {totals['duration_hours']:.1f} uur.",
+        "metrics": _metric_tiles(totals),
+        "chart": {
+            "type": "bar",
+            "title": "Duur per sport",
+            "x": labels,
+            "series": [
+                {"label": "Duur uren", "unit": "u", "values": [round(data["duration_hours"], 1) for _, data in items]},
+                {"label": "Afstand km", "unit": "km", "values": [round(data["distance_km"], 1) for _, data in items]},
+                {"label": "Sessies", "unit": "", "values": [data["sessions"] for _, data in items]},
+            ],
+        },
+        "table": {
+            "columns": ["Sport", "Sessies", "Km", "Uren"],
+            "rows": [[_sport_label(sport), int(data["sessions"]), round(data["distance_km"], 1), round(data["duration_hours"], 1)] for sport, data in items],
+        },
+    }
+
+
+def _pace_hr_correlation(rows: list[dict[str, Any]], request: dict[str, Any]) -> dict[str, Any]:
+    sport = request.get("sport") or "RUNNING"
+    relevant = [row for row in rows if row["avg_hr"] and row["distance_km"] > 0 and row["duration_min"] > 5]
+    if sport:
+        relevant = [row for row in relevant if row["sport"] == sport]
+
+    pace_sport = sport in {"RUNNING", "WALKING", "SWIMMING"}
+    points = []
+    for row in relevant:
+        x_value = row["pace_min_km"] if pace_sport else row["speed_kmh"]
+        if not x_value or not math.isfinite(x_value):
+            continue
+        points.append({
+            "x": round(x_value, 2),
+            "y": row["avg_hr"],
+            "label": row["name"],
+            "date": row["date"],
+            "distance_km": round(row["distance_km"], 1),
+        })
+    corr = _correlation([p["x"] for p in points], [p["y"] for p in points])
+    summary = "Te weinig sessies met hartslag en tempo om betrouwbaar te interpreteren."
+    if corr is not None:
+        relation = "sterk" if abs(corr) >= 0.65 else "matig" if abs(corr) >= 0.35 else "zwak"
+        summary = f"De relatie tussen {'tempo' if pace_sport else 'snelheid'} en hartslag is {relation} (r={corr:.2f})."
+    return {
+        "intent": "pace_hr_correlation",
+        "title": f"{_sport_label(sport)}: tempo vs hartslag",
+        "summary": summary,
+        "metrics": [
+            {"label": "Sessies", "value": len(points)},
+            {"label": "Gem. HR", "value": _avg([p["y"] for p in points]), "unit": "bpm"},
+            {"label": "Correlatie", "value": round(corr, 2) if corr is not None else "n.v.t."},
+        ],
+        "chart": {
+            "type": "scatter",
+            "title": ("Pace min/km vs HR" if pace_sport else "Snelheid km/u vs HR"),
+            "xLabel": "min/km" if pace_sport else "km/u",
+            "yLabel": "bpm",
+            "points": points,
+        },
+        "table": _activity_table(sorted(relevant, key=lambda row: row["start_time"], reverse=True)[:8]),
+    }
+
+
+def _personal_records(rows: list[dict[str, Any]], request: dict[str, Any]) -> dict[str, Any]:
+    candidates = [row for row in rows if row["duration_seconds"] > 0]
+    longest = sorted(candidates, key=lambda row: row["distance_km"], reverse=True)[:5]
+    fastest_running = [
+        row for row in candidates
+        if row["sport"] in {"RUNNING", "WALKING"} and row.get("pace_min_km") and row["distance_km"] >= 1
+    ]
+    fastest_running = sorted(fastest_running, key=lambda row: row["pace_min_km"])[:5]
+    highest_load = sorted(candidates, key=lambda row: row["load"], reverse=True)[:5]
+    rows_out = []
+    if longest:
+        top = longest[0]
+        rows_out.append(["Langste afstand", top["name"], top["date"], f"{top['distance_km']:.1f} km"])
+    if fastest_running:
+        top = fastest_running[0]
+        rows_out.append(["Snelste looptempo", top["name"], top["date"], _format_pace(top["pace_min_km"])])
+    if highest_load:
+        top = highest_load[0]
+        rows_out.append(["Hoogste load", top["name"], top["date"], f"{top['load']:.1f}"])
+    return {
+        "intent": "personal_records",
+        "title": "Persoonlijke uitschieters",
+        "summary": f"Ik vond {len(rows_out)} duidelijke uitschieters in de gekozen periode.",
+        "metrics": [
+            {"label": "Gecheckt", "value": len(candidates), "unit": "sessies"},
+            {"label": "Langste", "value": round(longest[0]["distance_km"], 1) if longest else 0, "unit": "km"},
+            {"label": "Zwaarste load", "value": round(highest_load[0]["load"], 1) if highest_load else 0},
+        ],
+        "chart": {
+            "type": "bar",
+            "title": "Top afstanden",
+            "x": [row["date"] or "?" for row in longest],
+            "series": [{"label": "Afstand km", "unit": "km", "values": [round(row["distance_km"], 1) for row in longest]}],
+        },
+        "table": {"columns": ["Record", "Activiteit", "Datum", "Waarde"], "rows": rows_out},
+    }
+
+
+def _workout_patterns(
+    activities: list[GarminActivityData],
+    details: list[GarminActivityAuxiliaryData],
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        from app.api.garmin import build_workout_patterns
+
+        patterns = build_workout_patterns(activities, details)
+    except Exception:
+        patterns = {"dominant_types": [], "by_type": {}, "weekly_pattern": {}}
+    dominant = patterns.get("dominant_types") or []
+    by_type = patterns.get("by_type") or {}
+    top = dominant[0]["type"] if dominant else "onbekend"
+    return {
+        "intent": "workout_pattern_analysis",
+        "title": "Workoutpatronen",
+        "summary": f"Je meest terugkerende type is {top}. Ik gebruik dit ook als context voor trainingsvoorstellen.",
+        "metrics": [
+            {"label": "Types", "value": len(dominant)},
+            {"label": "Easy share", "value": patterns.get("weekly_pattern", {}).get("easy_share"), "unit": ""},
+            {"label": "Hard/week", "value": patterns.get("weekly_pattern", {}).get("hard_sessions_per_week"), "unit": ""},
+        ],
+        "chart": {
+            "type": "bar",
+            "title": "Workouttypes",
+            "x": [item["type"] for item in dominant],
+            "series": [{"label": "Sessies", "unit": "", "values": [item["count"] for item in dominant]}],
+        },
+        "table": {
+            "columns": ["Type", "Sessies", "Sport", "Duur", "Structuur", "Confidence"],
+            "rows": [
+                [
+                    workout_type,
+                    data.get("sessions"),
+                    _sport_label(data.get("preferred_sport")),
+                    f"{data.get('typical_duration_min') or '?'} min",
+                    data.get("typical_structure") or "continu",
+                    data.get("confidence") or "low",
+                ]
+                for workout_type, data in by_type.items()
+            ],
+        },
+        "patterns": patterns,
+    }
+
+
+def _group_rows(rows: list[dict[str, Any]], bucket: str) -> dict[str, dict[str, float]]:
+    grouped: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if not row.get("start_time"):
+            continue
+        if bucket == "day":
+            key = row["start_time"].date().isoformat()
+        else:
+            week_start = row["start_time"].date() - timedelta(days=row["start_time"].weekday())
+            key = week_start.isoformat()
+        item = grouped.setdefault(key, {"sessions": 0, "distance_km": 0, "duration_hours": 0, "load": 0})
+        item["sessions"] += 1
+        item["distance_km"] += row["distance_km"]
+        item["duration_hours"] += row["duration_hours"]
+        item["load"] += row["load"]
+    return dict(sorted(grouped.items()))
+
+
+def _totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    hrs = [row["avg_hr"] for row in rows if row.get("avg_hr")]
+    return {
+        "sessions": len(rows),
+        "distance_km": sum(row["distance_km"] for row in rows),
+        "duration_hours": sum(row["duration_hours"] for row in rows),
+        "load": sum(row["load"] for row in rows),
+        "avg_hr": round(sum(hrs) / len(hrs), 1) if hrs else None,
+    }
+
+
+def _metric_tiles(totals: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"label": "Sessies", "value": totals["sessions"]},
+        {"label": "Afstand", "value": round(totals["distance_km"], 1), "unit": "km"},
+        {"label": "Duur", "value": round(totals["duration_hours"], 1), "unit": "u"},
+        {"label": "Load", "value": round(totals["load"], 1)},
+    ]
+
+
+def _coverage(
+    rows: list[dict[str, Any]],
+    current_rows: list[dict[str, Any]],
+    request: dict[str, Any],
+    compare_rows: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    hr_rows = [row for row in current_rows if row.get("avg_hr")]
+    distance_rows = [row for row in current_rows if row.get("distance_km", 0) > 0]
+    start = _parse_date(request["start_date"])
+    end = _parse_date(request["end_date"])
+    days = ((end - start).days + 1) if start and end else None
+    return {
+        "sessions": len(current_rows),
+        "query_sessions": len(rows),
+        "compare_sessions": len(compare_rows or []),
+        "days": days,
+        "hr_coverage": round(len(hr_rows) / len(current_rows), 2) if current_rows else 0,
+        "distance_coverage": round(len(distance_rows) / len(current_rows), 2) if current_rows else 0,
+        "sport": request.get("sport"),
+    }
+
+
+def _confidence(coverage: dict[str, Any], intent: str) -> dict[str, Any]:
+    sessions = coverage.get("sessions", 0)
+    hr_coverage = coverage.get("hr_coverage", 0)
+    level = "low"
+    if sessions >= 18 and (intent not in {"pace_hr_correlation"} or hr_coverage >= 0.7):
+        level = "high"
+    elif sessions >= 6 and (intent not in {"pace_hr_correlation"} or hr_coverage >= 0.45):
+        level = "medium"
+    notes = []
+    if sessions < 6:
+        notes.append("Weinig sessies in deze periode; interpretatie is voorzichtig.")
+    if intent == "pace_hr_correlation" and hr_coverage < 0.7:
+        notes.append("Niet elke sessie heeft hartslagdata, dus correlatie is indicatief.")
+    if coverage.get("distance_coverage", 0) < 0.7:
+        notes.append("Afstandsdata ontbreken bij een deel van de sessies.")
+    return {
+        "level": level,
+        "label": {"low": "voorzichtig", "medium": "redelijk", "high": "sterk"}[level],
+        "notes": notes,
+    }
+
+
+def _follow_up_suggestions(intent: str, request: dict[str, Any]) -> list[str]:
+    sport_text = " bij hardlopen" if request.get("sport") == "RUNNING" else ""
+    base = {
+        "activity_trend": [f"Vergelijk dit met de vorige 30 dagen{sport_text}", "Toon sportverdeling", "Welke sessie was het zwaarst?"],
+        "compare_periods": ["Waarom is dit veranderd?", "Toon dit per week", "Welke sport verklaart het verschil?"],
+        "sport_breakdown": ["Toon alleen hardlopen", "Vergelijk lopen met fietsen", "Welke sport levert meeste load?"],
+        "pace_hr_correlation": ["Toon alleen de laatste 90 dagen", "Welke sessies waren efficiënter?", "Vergelijk tempo met vorige maand"],
+        "personal_records": ["Toon top 5 zwaarste sessies", "Welke records bij lopen?", "Vergelijk mijn beste weken"],
+        "workout_pattern_analysis": ["Welke workouts doe ik te vaak?", "Maak voorstel volgens dit patroon", "Vergelijk harde sessies per week"],
+    }
+    return base.get(intent, base["activity_trend"])
+
+
+def _activity_table(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    ordered = sorted(rows, key=lambda row: row["start_time"], reverse=True)
+    return {
+        "columns": ["Datum", "Sport", "Activiteit", "Km", "Duur", "HR"],
+        "rows": [
+            [
+                row["date"],
+                _sport_label(row["sport"]),
+                row["name"],
+                round(row["distance_km"], 1),
+                _format_duration(row["duration_seconds"]),
+                row["avg_hr"] or "-",
+            ]
+            for row in ordered
+        ],
+    }
+
+
+def _sport_label(sport: Optional[str]) -> str:
+    return SPORT_LABELS.get(str(sport or "OTHER").upper(), str(sport or "Overig"))
+
+
+def _format_duration(seconds: int) -> str:
+    minutes = int(round((seconds or 0) / 60))
+    hours, mins = divmod(minutes, 60)
+    return f"{hours}u{mins:02d}" if hours else f"{mins}m"
+
+
+def _format_pace(value: Optional[float]) -> str:
+    if not value:
+        return "-"
+    minutes = int(value)
+    seconds = int(round((value - minutes) * 60))
+    return f"{minutes}:{seconds:02d}/km"
+
+
+def _pct_delta(current: float, previous: float) -> Optional[float]:
+    if previous == 0:
+        return None
+    return round(((current - previous) / previous) * 100, 1)
+
+
+def _format_delta(value: Optional[float]) -> str:
+    if value is None:
+        return "n.v.t."
+    return f"{value:+.1f}%"
+
+
+def _delta_word(value: Optional[float]) -> str:
+    if value is None:
+        return "niet goed vergelijkbaar"
+    if value > 5:
+        return "hoger"
+    if value < -5:
+        return "lager"
+    return "ongeveer gelijk"
+
+
+def _avg(values: list[float]) -> Optional[float]:
+    clean = [float(value) for value in values if value is not None and math.isfinite(float(value))]
+    return round(sum(clean) / len(clean), 1) if clean else None
+
+
+def _correlation(xs: list[float], ys: list[float]) -> Optional[float]:
+    if len(xs) < 4 or len(xs) != len(ys):
+        return None
+    mean_x = sum(xs) / len(xs)
+    mean_y = sum(ys) / len(ys)
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if not var_x or not var_y:
+        return None
+    return cov / math.sqrt(var_x * var_y)

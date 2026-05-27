@@ -5,6 +5,7 @@ const { fmtTime, recoveryLabel, recoveryAdvice } = window.FC_UTILS;
 function CoachOrb({
   recoveryScore, recoveryData, weather, apiStatus, userId,
   trainingProfile, draftWorkout, setDraftWorkout, messages, setMessages, thinking, setThinking,
+  currentScreen, onNavigateChat,
 }) {
   const { formatApiError } = window.FC_UTILS;
   const online = apiStatus === 'online';
@@ -34,6 +35,9 @@ function CoachOrb({
     setDraft('');
     setThinking(true);
     setChatError(null);
+    const lastAnalysisContext = [...(messages || [])]
+      .reverse()
+      .find((message) => message.analysis_result?.context)?.analysis_result?.context || null;
 
     if (online && userId) {
       try {
@@ -65,10 +69,17 @@ function CoachOrb({
             training_profile: trainingProfile || null,
             workout_patterns: trainingProfile?.workout_patterns || null,
             draft_workout: contextDraft || null,
+            last_analysis_context: lastAnalysisContext,
           },
         });
         if (res.draft_workout) setDraftWorkout?.(() => res.draft_workout);
-        setMessages((m) => [...m, { role: 'assistant', content: res.reply, time: fmtTime(new Date().toISOString()) }]);
+        setMessages((m) => [...m, {
+          role: 'assistant',
+          content: res.reply,
+          time: fmtTime(new Date().toISOString()),
+          source: 'live',
+          analysis_result: res.analysis_result || null,
+        }]);
       } catch (e) {
         setChatError(formatApiError(e.message));
         setMessages((m) => [...m, { role: 'assistant',
@@ -127,7 +138,7 @@ function CoachOrb({
             minHeight: 320, maxHeight: 380,
           }}>
             {messages.map((m, i) => (
-              <ChatBubble key={i} m={m} />
+              <ChatBubble key={i} m={m} onNavigateChat={onNavigateChat} onClose={() => setOpen(false)} />
             ))}
             {chatError && (
               <p style={{ margin: 0, fontSize: 12, color: 'var(--bad)' }}>{chatError}</p>
@@ -193,8 +204,9 @@ function CoachOrb({
   );
 }
 
-function ChatBubble({ m }) {
+function ChatBubble({ m, onNavigateChat, onClose }) {
   const isUser = m.role === 'user';
+  const analysis = m.analysis_result || m.analysis || null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
                   alignItems: isUser ? 'flex-end' : 'flex-start', gap: 4 }}>
@@ -206,6 +218,32 @@ function ChatBubble({ m }) {
         borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
         fontSize: 14, lineHeight: 1.5,
       }} dangerouslySetInnerHTML={{ __html: m.content }} />
+      {!isUser && analysis && (
+        <button type="button"
+          onClick={() => {
+            onClose?.();
+            onNavigateChat?.();
+          }}
+          style={{
+            border: '1px solid var(--line)',
+            background: 'var(--surface)',
+            borderRadius: 12,
+            padding: '10px 12px',
+            maxWidth: '85%',
+            textAlign: 'left',
+            cursor: 'pointer',
+            color: 'var(--ink)',
+            boxShadow: '0 10px 24px color-mix(in oklab, var(--ink) 7%, transparent)',
+          }}>
+          <span className="mono" style={{ display: 'block', fontSize: 9, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em', marginBottom: 4 }}>
+            Analysekaart
+          </span>
+          <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{analysis.title || 'Bekijk grafiek'}</span>
+          <span style={{ display: 'block', fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>
+            Open Coach-tab voor grafiek en tabel.
+          </span>
+        </button>
+      )}
       <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
                                       letterSpacing: '.1em', textTransform: 'uppercase' }}>
         {m.time}

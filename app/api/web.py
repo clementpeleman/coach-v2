@@ -10,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database.database import get_db
+from app.database.database import SessionLocal, get_db
 from app.database.models import OAuthSession, UserProfile
 from app.tools.garmin_oauth import GarminOAuthService
 
@@ -53,6 +53,7 @@ class ChatResponse(BaseModel):
     reply: str
     draft_workout: Optional[dict[str, Any]] = None
     workout_patch: Optional[dict[str, Any]] = None
+    analysis_result: Optional[dict[str, Any]] = None
 
 
 class WeatherResponse(BaseModel):
@@ -325,6 +326,29 @@ async def web_weather(lat: float, lon: float):
 @router.post("/chat", response_model=ChatResponse)
 async def web_chat(payload: ChatRequest):
     """Chat with the existing coach agent."""
+    try:
+        from app.tools.activity_analysis import (
+            build_activity_analysis,
+            build_activity_analysis_reply,
+            detect_activity_analysis_request,
+        )
+
+        context = payload.context if isinstance(payload.context, dict) else {}
+        last_context = context.get("last_analysis_context")
+        analysis_request = detect_activity_analysis_request(payload.message, last_context)
+        if analysis_request:
+            db = SessionLocal()
+            try:
+                analysis_result = build_activity_analysis(db, payload.user_id, analysis_request)
+            finally:
+                db.close()
+            return ChatResponse(
+                reply=build_activity_analysis_reply(analysis_result),
+                analysis_result=analysis_result,
+            )
+    except Exception as exc:
+        logger.warning("Structured activity analysis failed, falling back to chat agent: %s", exc)
+
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=503,

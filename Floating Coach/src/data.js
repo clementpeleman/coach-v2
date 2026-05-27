@@ -90,10 +90,12 @@ window.FC_DATA = (() => {
 
   // Floating coach quick suggestions
   const coachSuggestions = [
-    'Hoe was mijn laatste training?',
+    'Analyseer mijn laatste 30 dagen',
+    'Toon mijn afstand per week',
+    'Vergelijk lopen met fietsen',
+    'Tempo vs hartslag bij lopen',
+    'Welke workoutpatronen heb ik?',
     'Wat train ik morgen?',
-    'Wat is mijn herstelstatus?',
-    'Pas mijn training van vandaag aan',
   ];
 
   return {

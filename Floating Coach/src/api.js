@@ -103,6 +103,17 @@
   function fetchWeeklyAnalysis(userId) {
     return getJson(`/garmin/analysis/weekly?user_id=${userId}`);
   }
+  function fetchActivityAnalysis({ userId, message, intent, startDate, endDate, sport, lastContext }) {
+    return postJson('/analysis/activity', {
+      user_id: userId,
+      message: message || null,
+      intent: intent || null,
+      start_date: startDate || null,
+      end_date: endDate || null,
+      sport: sport || null,
+      last_context: lastContext || null,
+    });
+  }
   function fetchTrainingProfile(userId, days = 120, currentDays = 7) {
     return getJson(`/garmin/training/profile?user_id=${userId}&days=${days}&current_days=${currentDays}`);
   }
@@ -157,7 +168,7 @@
   window.FC_API = {
     getBaseUrl, setBaseUrl, ping,
     getGarminAuthStartUrl, fetchGarminAuthStatus, startDirectGarminOAuth, disconnectGarmin,
-    fetchGarminActivities, fetchWeeklyAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
+    fetchGarminActivities, fetchWeeklyAnalysis, fetchActivityAnalysis, fetchGarminRecovery, fetchGarminImportStatus,
     requestInitialGarminSync,
     fetchTrainingProfile, fetchTrainingRecommendation, adjustTrainingRecommendation,
     createTrainingWorkout, getTrainingWorkoutFitUrl, uploadTrainingWorkoutToGarmin,
