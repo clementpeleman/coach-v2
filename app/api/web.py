@@ -326,11 +326,15 @@ async def web_weather(lat: float, lon: float):
 @router.post("/chat", response_model=ChatResponse)
 async def web_chat(payload: ChatRequest):
     """Chat with the existing coach agent."""
+    analysis_result = None
+    analysis_prompt_context = None
     try:
         from app.tools.activity_analysis import (
+            analysis_request_needs_coach_answer,
             build_activity_analysis,
             build_activity_analysis_reply,
             detect_activity_analysis_request,
+            summarize_activity_analysis_for_prompt,
         )
 
         context = payload.context if isinstance(payload.context, dict) else {}
@@ -342,10 +346,17 @@ async def web_chat(payload: ChatRequest):
                 analysis_result = build_activity_analysis(db, payload.user_id, analysis_request)
             finally:
                 db.close()
-            return ChatResponse(
-                reply=build_activity_analysis_reply(analysis_result),
-                analysis_result=analysis_result,
+            needs_coach_answer = analysis_request.get("needs_coach_answer") or analysis_request_needs_coach_answer(
+                payload.message,
+                analysis_request,
             )
+            if needs_coach_answer and settings.openai_api_key:
+                analysis_prompt_context = summarize_activity_analysis_for_prompt(analysis_result)
+            else:
+                return ChatResponse(
+                    reply=build_activity_analysis_reply(analysis_result),
+                    analysis_result=analysis_result,
+                )
     except Exception as exc:
         logger.warning("Structured activity analysis failed, falling back to chat agent: %s", exc)
 
@@ -378,8 +389,13 @@ async def web_chat(payload: ChatRequest):
         message = payload.message
         draft_workout = None
         workout_patch = None
+        context_lines = []
+        if analysis_prompt_context:
+            context_lines.append(
+                "Structured activiteitenanalyse voor deze vraag:\n"
+                f"{analysis_prompt_context}"
+            )
         if payload.context:
-            context_lines = []
             current_draft = payload.context.get("draft_workout") if isinstance(payload.context, dict) else None
             training_profile = payload.context.get("training_profile") if isinstance(payload.context, dict) else None
             if isinstance(current_draft, dict):
@@ -456,15 +472,31 @@ async def web_chat(payload: ChatRequest):
                     f"neerslag {weather.get('precipitation_mm')} mm. "
                     f"Trainingsnota: {weather.get('training_note')}."
                 )
-            if context_lines:
-                message = (
-                    "CONTEXT VOOR COACH\n"
-                    + "\n".join(context_lines)
-                    + "\n\n"
-                    f"GEBRUIKERSVRAAG\n{payload.message}"
-                )
+        if context_lines:
+            message = (
+                "CONTEXT VOOR COACH\n"
+                + "\n".join(context_lines)
+                + "\n\n"
+                f"GEBRUIKERSVRAAG\n{payload.message}"
+            )
 
         result = agent_executor.invoke({"input": message, "chat_history": chat_history})
-        return ChatResponse(reply=result["output"], draft_workout=draft_workout, workout_patch=workout_patch)
+        return ChatResponse(
+            reply=result["output"],
+            draft_workout=draft_workout,
+            workout_patch=workout_patch,
+            analysis_result=analysis_result,
+        )
     except Exception as exc:
+        if analysis_result is not None:
+            try:
+                from app.tools.activity_analysis import build_activity_analysis_reply
+
+                logger.warning("Chat agent failed after structured analysis, returning deterministic answer: %s", exc)
+                return ChatResponse(
+                    reply=build_activity_analysis_reply(analysis_result),
+                    analysis_result=analysis_result,
+                )
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=str(exc)) from exc

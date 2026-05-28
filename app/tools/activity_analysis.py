@@ -60,7 +60,9 @@ def detect_activity_analysis_request(
             request["data_source"] = data_source
         if "grafiek" in text or "chart" in text:
             request["wants_chart"] = True
-        return _coerce_request(request, today=today)
+        coerced = _coerce_request(request, today=today)
+        coerced["needs_coach_answer"] = analysis_request_needs_coach_answer(message, coerced)
+        return coerced
 
     intent = _detect_intent(text)
     if not intent:
@@ -69,7 +71,7 @@ def detect_activity_analysis_request(
         sport = None
 
     period = _detect_period(text, intent, today)
-    return _coerce_request(
+    request = _coerce_request(
         {
             "intent": intent,
             "message": message,
@@ -87,6 +89,8 @@ def detect_activity_analysis_request(
         },
         today=today,
     )
+    request["needs_coach_answer"] = analysis_request_needs_coach_answer(message, request)
+    return request
 
 
 def build_activity_analysis(
@@ -153,11 +157,144 @@ def build_activity_analysis_reply(result: dict[str, Any]) -> str:
     period = result.get("context") or {}
     start = escape(str(period.get("start_date") or "?"))
     end = escape(str(period.get("end_date") or "?"))
+    message = str(period.get("message") or "").lower()
+    coach_answer = _deterministic_analysis_answer(result, message)
+    if coach_answer:
+        return coach_answer
     return (
         f"<b>{title}</b><br/>"
         f"{summary}<br/><br/>"
         f"<i>Ik heb er een grafiekkaart bij gezet. Datadekking: {sessions} sessies, "
         f"{start} tot {end}, bron {source_label}, vertrouwen {level}.</i>"
+    )
+
+
+def analysis_request_needs_coach_answer(message: str, request: Optional[dict[str, Any]] = None) -> bool:
+    """Return true when the user asks for interpretation, not only a chart."""
+    text = (message or "").lower()
+    if not text:
+        return False
+    explanatory = (
+        "waarom", "hoezo", "hoe komt", "waardoor", "verklaar", "betekent",
+        "interpreteer", "duid", "moet ik", "wat zegt", "wat betekent",
+        "is dit normaal", "kan deze", "kan dat", "advies",
+    )
+    ranking = ("welke", "top", "beste", "slechtste", "effici")
+    if any(word in text for word in explanatory):
+        return True
+    if "effici" in text and any(word in text for word in ranking):
+        return True
+    if request and request.get("intent") == "pace_hr_correlation" and "hartslag" in text and len(text) > 70:
+        return True
+    return False
+
+
+def summarize_activity_analysis_for_prompt(result: dict[str, Any]) -> str:
+    """Compact analysis context for the conversational agent."""
+    coverage = result.get("coverage") or {}
+    confidence = result.get("confidence") or {}
+    metrics = result.get("metrics") or []
+    chart = result.get("chart") or {}
+    table = result.get("table") or {}
+    rows = table.get("rows") or []
+    points = chart.get("points") or []
+    efficiency = result.get("efficiency_rank") or {}
+
+    lines = [
+        f"Titel: {result.get('title')}",
+        f"Samenvatting: {result.get('summary')}",
+        f"Databron: {coverage.get('effective_data_source')} "
+        f"({coverage.get('detail_segments', 0)} detailsegmenten, "
+        f"{coverage.get('fallback_summary_activities', 0)} summary fallback activiteiten)",
+        f"Dekking: {coverage.get('sessions')} sessies, {coverage.get('points')} punten, "
+        f"HR-dekking {coverage.get('hr_coverage')}, confidence {confidence.get('level')}.",
+        "Metrics: "
+        + "; ".join(
+            f"{item.get('label')}={item.get('value')}{item.get('unit') or ''}"
+            for item in metrics
+            if isinstance(item, dict)
+        ),
+    ]
+    if points:
+        lines.append(
+            "Grafiekpunten: "
+            + "; ".join(
+                f"{point.get('label')} ({point.get('date')}): x={point.get('x')} {chart.get('xLabel')}, "
+                f"HR={point.get('y')} bpm"
+                for point in points[:12]
+                if isinstance(point, dict)
+            )
+        )
+    if efficiency.get("best"):
+        lines.append(
+            "Meest efficiente punten: "
+            + "; ".join(
+                f"{item.get('label')} {item.get('date')}: score {item.get('score')}, "
+                f"pace {item.get('pace')}, HR {item.get('heart_rate')}"
+                for item in efficiency.get("best", [])[:5]
+            )
+        )
+    if rows:
+        lines.append(
+            "Tabelrijen: "
+            + "; ".join(" | ".join(str(cell) for cell in row) for row in rows[:8] if isinstance(row, list))
+        )
+    lines.append(
+        "Antwoord als coach in het Nederlands. Geef eerst de interpretatie op de vraag. "
+        "Herhaal niet alleen dat er een grafiekkaart is. Wees voorzichtig met medische conclusies."
+    )
+    return "\n".join(lines)
+
+
+def _deterministic_analysis_answer(result: dict[str, Any], message: str) -> Optional[str]:
+    intent = result.get("intent")
+    if intent != "pace_hr_correlation":
+        return None
+
+    efficiency = result.get("efficiency_rank") or {}
+    if "effici" in message and efficiency.get("best"):
+        best = efficiency["best"][:3]
+        rows = "".join(
+            "<li>"
+            f"{escape(str(item.get('label') or 'Sessie'))} ({escape(str(item.get('date') or '?'))}): "
+            f"{escape(str(item.get('pace') or item.get('speed_kmh') or '?'))}, "
+            f"{escape(str(item.get('heart_rate') or '?'))} bpm"
+            "</li>"
+            for item in best
+        )
+        return (
+            "<b>Meest efficiënte sessies in deze set</b><br/>"
+            "Ik rangschik hier pragmatisch: bij lopen is een lagere combinatie van tempo en hartslag beter. "
+            "Dat is geen labtest, maar wel bruikbaar om trends te zien.<br/><br/>"
+            f"<ol>{rows}</ol>"
+            "<i>Tip: vergelijk dit liefst binnen hetzelfde type sessie, bijvoorbeeld easy met easy of tempo met tempo.</i>"
+        )
+
+    explanatory_words = (
+        "waarom", "hoezo", "hoe komt", "waardoor", "verklaar", "betekent",
+        "is dit normaal", "kan deze", "kan dat",
+    )
+    if not any(word in message for word in explanatory_words):
+        return None
+
+    metrics = {item.get("label"): item.get("value") for item in result.get("metrics", []) if isinstance(item, dict)}
+    corr = metrics.get("Correlatie")
+    avg_hr = metrics.get("Gem. HR")
+    coverage = result.get("coverage") or {}
+    source_label = _data_source_label(coverage.get("effective_data_source"))
+    return (
+        "<b>Kort antwoord: je hartslag lijkt in deze data vrij snel mee te stijgen met inspanning, "
+        "maar deze grafiek bewijst niet één oorzaak.</b><br/><br/>"
+        f"De correlatie is <b>{escape(str(corr))}</b>. Omdat pace in min/km werkt, betekent een negatieve correlatie meestal: "
+        "lager getal = sneller tempo = hogere hartslag. Dat is op zich logisch. "
+        f"Je gemiddelde HR in de gebruikte punten is <b>{escape(str(avg_hr))} bpm</b> "
+        f"op basis van <b>{coverage.get('sessions', 0)} sessies</b> ({escape(source_label)}).<br/><br/>"
+        "Dat je bij wandelen richting 135 bpm kan gaan, kan komen door helling/wind, warmte, vermoeidheid, stress, "
+        "cafeïne/dehydratie, weinig warming-up, of soms sensorruis/cadence lock. "
+        "Als dit nieuw is, ook in rust hoog blijft, of gepaard gaat met duizeligheid, pijn op de borst of benauwdheid: "
+        "laat dat medisch checken.<br/><br/>"
+        "<i>Beste volgende analyse: toon dezelfde vraag specifiek voor wandelen met activityDetails, "
+        "dan vergelijken we wandeltempo, helling/segmenten en HR apart van je looptrainingen.</i>"
     )
 
 
@@ -752,6 +889,7 @@ def _pace_hr_correlation(rows: list[dict[str, Any]], request: dict[str, Any]) ->
     if corr is not None:
         relation = "sterk" if abs(corr) >= 0.65 else "matig" if abs(corr) >= 0.35 else "zwak"
         summary = f"De relatie tussen {'tempo' if pace_sport else 'snelheid'} en hartslag is {relation} (r={corr:.2f})."
+    efficiency_rank = _efficiency_rank(points, pace_sport)
     return {
         "intent": "pace_hr_correlation",
         "title": f"{_sport_label(sport)}: tempo vs hartslag",
@@ -769,6 +907,7 @@ def _pace_hr_correlation(rows: list[dict[str, Any]], request: dict[str, Any]) ->
             "yLabel": "bpm",
             "points": points,
         },
+        "efficiency_rank": efficiency_rank,
         "table": _activity_table(sorted(relevant, key=lambda row: row["start_time"], reverse=True)[:8]),
     }
 
@@ -808,6 +947,40 @@ def _personal_records(rows: list[dict[str, Any]], request: dict[str, Any]) -> di
             "series": [{"label": "Afstand km", "unit": "km", "values": [round(row["distance_km"], 1) for row in longest]}],
         },
         "table": {"columns": ["Record", "Activiteit", "Datum", "Waarde"], "rows": rows_out},
+    }
+
+
+def _efficiency_rank(points: list[dict[str, Any]], pace_sport: bool) -> dict[str, list[dict[str, Any]]]:
+    ranked = []
+    for point in points:
+        x_value = point.get("x")
+        hr = point.get("y")
+        if not isinstance(x_value, (int, float)) or not isinstance(hr, (int, float)) or hr <= 0:
+            continue
+        if pace_sport:
+            score = x_value * hr
+            sort_value = score
+        else:
+            score = x_value / hr
+            sort_value = -score
+        ranked.append({
+            "label": point.get("label"),
+            "date": point.get("date"),
+            "score": round(score, 2),
+            "pace": _format_pace(x_value) if pace_sport else None,
+            "speed_kmh": round(x_value, 1) if not pace_sport else None,
+            "heart_rate": hr,
+            "distance_km": point.get("distance_km"),
+            "duration_min": point.get("duration_min"),
+            "_sort": sort_value,
+        })
+    ranked.sort(key=lambda item: item["_sort"])
+    for item in ranked:
+        item.pop("_sort", None)
+    return {
+        "best": ranked[:5],
+        "worst": ranked[-5:][::-1],
+        "method": "pace_x_hr_lower_is_better" if pace_sport else "speed_per_hr_higher_is_better",
     }
 
 
