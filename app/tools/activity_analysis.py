@@ -5,6 +5,7 @@ import json
 import math
 import re
 import uuid
+import base64
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from html import escape
@@ -117,6 +118,20 @@ def build_activity_analysis(
         end_dt,
         normalized.get("sport"),
         summary_ids=[activity.summary_id for activity in activities if activity.summary_id],
+        activity_ids=[activity.activity_id for activity in activities if activity.activity_id],
+    )
+    activity_files = (
+        _load_activity_files(
+            db,
+            user_id,
+            query_start,
+            end_dt,
+            normalized.get("sport"),
+            summary_ids=[activity.summary_id for activity in activities if activity.summary_id],
+            activity_ids=[activity.activity_id for activity in activities if activity.activity_id],
+        )
+        if normalized["intent"] == "hr_response_kinetics"
+        else []
     )
     summary_rows = [_activity_row(activity) for activity in activities]
     rows, detail_stats = _analysis_rows(activities, details, normalized.get("data_source", "auto"))
@@ -134,7 +149,7 @@ def build_activity_analysis(
     elif intent == "pace_hr_correlation":
         result = _pace_hr_correlation(current_rows, normalized)
     elif intent == "hr_response_kinetics":
-        result = _hr_response_kinetics(activities, details, normalized)
+        result = _hr_response_kinetics(activities, details + activity_files, normalized)
     elif intent == "personal_records":
         result = _personal_records(current_summary_rows, normalized)
     elif intent == "workout_pattern_analysis":
@@ -607,15 +622,43 @@ def _load_activity_details(
     end: datetime,
     _sport: Optional[str],
     summary_ids: Optional[list[str]] = None,
+    activity_ids: Optional[list[str]] = None,
 ) -> list[GarminActivityAuxiliaryData]:
     range_filter = GarminActivityAuxiliaryData.start_time >= start
     range_filter = range_filter & (GarminActivityAuxiliaryData.start_time <= end)
     if summary_ids:
         range_filter = or_(range_filter, GarminActivityAuxiliaryData.summary_id.in_(summary_ids))
+    if activity_ids:
+        range_filter = or_(range_filter, GarminActivityAuxiliaryData.activity_id.in_(activity_ids))
     query = (
         db.query(GarminActivityAuxiliaryData)
         .filter(GarminActivityAuxiliaryData.user_id == user_id)
         .filter(GarminActivityAuxiliaryData.summary_type == "activityDetails")
+        .filter(range_filter)
+        .order_by(GarminActivityAuxiliaryData.start_time.asc())
+    )
+    return query.all()
+
+
+def _load_activity_files(
+    db: Session,
+    user_id: int,
+    start: datetime,
+    end: datetime,
+    _sport: Optional[str],
+    summary_ids: Optional[list[str]] = None,
+    activity_ids: Optional[list[str]] = None,
+) -> list[GarminActivityAuxiliaryData]:
+    range_filter = GarminActivityAuxiliaryData.start_time >= start
+    range_filter = range_filter & (GarminActivityAuxiliaryData.start_time <= end)
+    if summary_ids:
+        range_filter = or_(range_filter, GarminActivityAuxiliaryData.summary_id.in_(summary_ids))
+    if activity_ids:
+        range_filter = or_(range_filter, GarminActivityAuxiliaryData.activity_id.in_(activity_ids))
+    query = (
+        db.query(GarminActivityAuxiliaryData)
+        .filter(GarminActivityAuxiliaryData.user_id == user_id)
+        .filter(GarminActivityAuxiliaryData.summary_type == "activityFiles")
         .filter(range_filter)
         .order_by(GarminActivityAuxiliaryData.start_time.asc())
     )
@@ -1000,27 +1043,44 @@ def _hr_response_kinetics(
     request: dict[str, Any],
 ) -> dict[str, Any]:
     sport = request.get("sport")
-    detail_index = _build_detail_index(details)
+    activity_details = [item for item in details if getattr(item, "summary_type", None) == "activityDetails"]
+    activity_files = [item for item in details if getattr(item, "summary_type", None) == "activityFiles"]
+    detail_index = _build_detail_index(activity_details)
+    file_index = _build_activity_file_index(activity_files)
     candidates: list[dict[str, Any]] = []
     for activity in sorted(activities, key=lambda item: item.start_time or datetime.min, reverse=True):
         normalized_sport = _normalize_sport(activity)
         if sport and normalized_sport != sport:
             continue
         detail = _detail_payload_for_activity(activity, detail_index)
+        source = "activityDetails"
         series = _sample_series(activity, detail, normalized_sport) if detail else []
+        if len(series) < 24:
+            file_payload = _activity_file_for_activity(activity, file_index)
+            fit_series, fit_detail = _fit_series_from_activity_file(file_payload, normalized_sport) if file_payload else ([], {})
+            if len(fit_series) > len(series):
+                detail = fit_detail
+                series = fit_series
+                source = "activityFiles"
         if len(series) >= 24:
             candidates.append({
                 "activity": activity,
                 "sport": normalized_sport,
-                "detail": detail,
+                "detail": detail or {},
                 "series": series,
+                "source": source,
             })
 
     if not candidates:
+        source_hint = (
+            "Ik vond activityFiles, maar kon daar geen bruikbare HR/snelheid-records uit lezen."
+            if activity_files
+            else "Ik vond geen activityDetails-samples of FIT activityFiles voor de gekozen periode/sport."
+        )
         return {
             "intent": "hr_response_kinetics",
             "title": "HR-respons binnen training",
-            "summary": "Ik heb hiervoor ActivityDetails-samples nodig; die ontbreken nog voor de gekozen periode/sport.",
+            "summary": source_hint,
             "metrics": [
                 {"label": "Sessies", "value": 0},
                 {"label": "Samples", "value": 0},
@@ -1030,13 +1090,17 @@ def _hr_response_kinetics(
             "chart": None,
             "table": {"columns": ["Blok", "Duur", "Tempo/snelheid", "HR", "Stijging", "Lag", "Herstel 60s"], "rows": []},
             "coach_findings": [
-                "Zet Activity Details-webhook aan en importeer activityDetails; summaries zijn te grof voor HR-respons per blok.",
+                (
+                    "Zet Activity Files en Activity Details aan in Garmin, sync je activiteit en importeer opnieuw; "
+                    "summaries zijn te grof voor HR-respons per blok."
+                ),
             ],
             "_coverage_overrides": {
                 "sessions": 0,
                 "points": 0,
                 "sample_points": 0,
                 "blocks": 0,
+                "activity_file_records": len(activity_files),
                 "effective_data_source": "summary",
             },
         }
@@ -1063,6 +1127,7 @@ def _hr_response_kinetics(
     sport = analysed["sport"]
     series = analysed["series"]
     block_stats = analysed["block_stats"]
+    source = analysed.get("source") or "activityDetails"
     pace_sport = sport in {"RUNNING", "WALKING", "SWIMMING"}
     lag_values = [item["lag_seconds"] for item in block_stats if item.get("lag_seconds") is not None]
     rise_values = [item["rise_bpm_per_min"] for item in block_stats if item.get("rise_bpm_per_min") is not None]
@@ -1076,7 +1141,8 @@ def _hr_response_kinetics(
     activity_name = activity.activity_name or _sport_label(sport)
     summary = (
         f"Ik analyseer {activity_name}: {len(block_stats)} blokken met samples. "
-        "Dit toont hoe HR reageert op tempo/snelheidswissels binnen de training."
+        "Dit toont hoe HR reageert op tempo/snelheidswissels binnen de training "
+        f"op basis van {_data_source_label(source)}."
     )
     findings = _response_findings(block_stats, pace_sport)
     chart_points = _thin_series(series, max_points=120)
@@ -1132,7 +1198,8 @@ def _hr_response_kinetics(
             "points": len(block_stats),
             "sample_points": len(series),
             "blocks": len(block_stats),
-            "effective_data_source": "activityDetails",
+            "activity_file_records": len(activity_files),
+            "effective_data_source": source,
             "detail_segments": len(block_stats),
             "hr_coverage": round(
                 len([item for item in series if item.get("hr") is not None]) / max(1, len(series)),
@@ -1280,6 +1347,42 @@ def _detail_payload_for_activity(
     return None
 
 
+def _build_activity_file_index(details: list[GarminActivityAuxiliaryData]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for detail in details:
+        payload = _raw_payload(detail)
+        if not payload.get("contentBase64"):
+            continue
+        keys = [
+            detail.activity_id,
+            detail.summary_id,
+            payload.get("activityId"),
+            payload.get("summaryId"),
+            payload.get("fileId"),
+        ]
+        for key in keys:
+            if key is not None:
+                index[str(key)] = payload
+                if str(key).endswith("-detail"):
+                    index[str(key).replace("-detail", "")] = payload
+    return index
+
+
+def _activity_file_for_activity(
+    activity: GarminActivityData,
+    file_index: dict[str, dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    keys = [
+        activity.activity_id,
+        activity.summary_id,
+        str(activity.summary_id).replace("-detail", "") if activity.summary_id else None,
+    ]
+    for key in keys:
+        if key is not None and str(key) in file_index:
+            return file_index[str(key)]
+    return None
+
+
 def _sample_series(
     activity: GarminActivityData,
     detail: dict[str, Any],
@@ -1312,9 +1415,7 @@ def _sample_series(
             if delta_t > 0 and delta_d >= 0:
                 speed_mps = delta_d / delta_t
         speed_kmh = speed_mps * 3.6 if speed_mps is not None else None
-        pace_min_km = (1000 / speed_mps / 60) if speed_mps and speed_mps > 0 else None
-        if sport == "SWIMMING" and speed_mps and speed_mps > 0:
-            pace_min_km = (100 / speed_mps / 60)
+        pace_min_km = _pace_from_speed(speed_mps, sport)
         row = {
             "elapsed_s": float(elapsed),
             "hr": int(round(hr)) if hr is not None else None,
@@ -1359,7 +1460,148 @@ def _sample_elapsed_seconds(sample: dict[str, Any], first_start: Optional[int]) 
     return None
 
 
+def _fit_series_from_activity_file(
+    payload: Optional[dict[str, Any]],
+    sport: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not payload or not payload.get("contentBase64"):
+        return [], {}
+    try:
+        from fit_tool.fit_file import FitFile
+
+        content = base64.b64decode(str(payload.get("contentBase64")))
+        fit_file = FitFile.from_bytes(content, check_crc=False)
+    except Exception:
+        return [], {}
+
+    raw_rows: list[dict[str, Any]] = []
+    lap_starts: list[float] = []
+    first_ts: Optional[float] = None
+    previous: Optional[dict[str, Any]] = None
+    for record in fit_file.records:
+        message = getattr(record, "message", None)
+        name = getattr(message, "name", None)
+        if name == "lap":
+            lap_ts = _fit_field_seconds(message, "start_time") or _fit_field_seconds(message, "timestamp")
+            if lap_ts is not None:
+                if first_ts is None:
+                    first_ts = lap_ts
+                lap_starts.append(max(0.0, lap_ts - first_ts))
+            continue
+        if name != "record":
+            continue
+        ts = _fit_field_seconds(message, "timestamp")
+        if ts is None:
+            continue
+        if first_ts is None:
+            first_ts = ts
+        elapsed = max(0.0, ts - first_ts)
+        hr = _fit_field_number(message, "heart_rate")
+        distance_m = _fit_field_number(message, "distance")
+        speed_mps = (
+            _fit_field_number(message, "enhanced_speed")
+            or _fit_field_number(message, "speed")
+            or _fit_field_number(message, "velocity")
+        )
+        if speed_mps is not None and speed_mps > 80:
+            speed_mps = speed_mps / 1000
+        if not speed_mps and previous and distance_m is not None and previous.get("distance_m") is not None:
+            delta_t = elapsed - previous["elapsed_s"]
+            delta_d = distance_m - previous["distance_m"]
+            if delta_t > 0 and delta_d >= 0:
+                speed_mps = delta_d / delta_t
+        row = {
+            "elapsed_s": elapsed,
+            "hr": int(round(hr)) if hr is not None else None,
+            "distance_m": distance_m,
+            "speed_mps": speed_mps,
+            "speed_kmh": speed_mps * 3.6 if speed_mps is not None else None,
+            "pace_min_km": _pace_from_speed(speed_mps, sport),
+        }
+        raw_rows.append(row)
+        previous = row
+    if len(raw_rows) < 2:
+        return [], {}
+    detail_like = {
+        "lapElapsedSeconds": sorted(set(round(value, 3) for value in lap_starts if value >= 0)),
+        "samples": [
+            {
+                "startTimeInSeconds": int(round(row["elapsed_s"])),
+                "heartRate": row.get("hr"),
+                "speedMetersPerSecond": row.get("speed_mps"),
+                "totalDistanceInMeters": row.get("distance_m"),
+            }
+            for row in raw_rows
+        ],
+    }
+    return _smooth_sample_series(raw_rows), detail_like
+
+
+def _fit_field_number(message: Any, name: str) -> Optional[float]:
+    try:
+        field = message.get_field_by_name(name)
+    except Exception:
+        field = None
+    if field is None:
+        return None
+    try:
+        return _number(field.get_value())
+    except Exception:
+        return None
+
+
+def _fit_field_seconds(message: Any, name: str) -> Optional[float]:
+    try:
+        field = message.get_field_by_name(name)
+    except Exception:
+        field = None
+    if field is None:
+        return None
+    try:
+        value = field.get_value()
+    except Exception:
+        return None
+    return _timestamp_seconds(value)
+
+
+def _timestamp_seconds(value: Any) -> Optional[float]:
+    if isinstance(value, datetime):
+        return value.timestamp()
+    number = _number(value)
+    if number is not None:
+        return number
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _pace_from_speed(speed_mps: Optional[float], sport: str) -> Optional[float]:
+    if not speed_mps or speed_mps <= 0:
+        return None
+    if sport == "SWIMMING":
+        return 100 / speed_mps / 60
+    return 1000 / speed_mps / 60
+
+
 def _response_blocks(series: list[dict[str, Any]], detail: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    elapsed_laps = sorted(
+        _number(value)
+        for value in detail.get("lapElapsedSeconds", [])
+        if _number(value) is not None
+    )
+    if len(elapsed_laps) >= 2:
+        boundaries = sorted(set([0.0, *elapsed_laps, series[-1]["elapsed_s"] + 1]))
+        blocks = []
+        for start, end in zip(boundaries, boundaries[1:]):
+            block = [item for item in series if start <= item["elapsed_s"] < end]
+            if len(block) >= 2:
+                blocks.append(block)
+        if len(blocks) >= 2:
+            return blocks
+
     laps = sorted(
         [
             _number(lap.get("startTimeInSeconds"))
@@ -1741,6 +1983,7 @@ def _data_source_label(source: Optional[str]) -> str:
     return {
         "summary": "summary",
         "activityDetails": "activityDetails",
+        "activityFiles": "activityFiles (FIT)",
         "mixed": "activityDetails + summary fallback",
         "auto": "auto",
         "details": "activityDetails",

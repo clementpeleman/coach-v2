@@ -836,6 +836,7 @@ function formatChartValue(value, unit) {
 
 function analysisSourceLabel(source) {
   if (source === 'activityDetails') return 'ActivityDetails';
+  if (source === 'activityFiles') return 'ActivityFiles FIT';
   if (source === 'mixed') return 'ActivityDetails + summary';
   if (source === 'details') return 'ActivityDetails';
   if (source === 'auto') return 'Auto';
