@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timedelta
 from html import escape
 from typing import Any, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database.models import GarminActivityAuxiliaryData, GarminActivityData
@@ -46,6 +47,7 @@ def detect_activity_analysis_request(
         return None
 
     sport = _detect_sport(text)
+    data_source = _detect_data_source(text)
     today = date.today()
 
     follow_up = _looks_like_analysis_follow_up(text)
@@ -54,6 +56,8 @@ def detect_activity_analysis_request(
         request["message"] = message
         if sport:
             request["sport"] = sport
+        if data_source:
+            request["data_source"] = data_source
         if "grafiek" in text or "chart" in text:
             request["wants_chart"] = True
         return _coerce_request(request, today=today)
@@ -73,6 +77,7 @@ def detect_activity_analysis_request(
             "start_date": period["start_date"].isoformat(),
             "end_date": period["end_date"].isoformat(),
             "bucket": period.get("bucket"),
+            "data_source": data_source or "auto",
             "compare_start_date": period.get("compare_start_date").isoformat()
             if period.get("compare_start_date")
             else None,
@@ -98,8 +103,18 @@ def build_activity_analysis(
 
     query_start = compare_start or start_dt
     activities = _load_activities(db, user_id, query_start, end_dt, normalized.get("sport"))
-    rows = [_activity_row(activity) for activity in activities]
+    details = _load_activity_details(
+        db,
+        user_id,
+        query_start,
+        end_dt,
+        normalized.get("sport"),
+        summary_ids=[activity.summary_id for activity in activities if activity.summary_id],
+    )
+    summary_rows = [_activity_row(activity) for activity in activities]
+    rows, detail_stats = _analysis_rows(activities, details, normalized.get("data_source", "auto"))
     current_rows = [row for row in rows if start_dt <= row["start_time"] <= end_dt]
+    current_summary_rows = [row for row in summary_rows if start_dt <= row["start_time"] <= end_dt]
     compare_rows = [
         row for row in rows if compare_start and compare_end and compare_start <= row["start_time"] <= compare_end
     ]
@@ -112,16 +127,15 @@ def build_activity_analysis(
     elif intent == "pace_hr_correlation":
         result = _pace_hr_correlation(current_rows, normalized)
     elif intent == "personal_records":
-        result = _personal_records(current_rows, normalized)
+        result = _personal_records(current_summary_rows, normalized)
     elif intent == "workout_pattern_analysis":
-        details = _load_activity_details(db, user_id, start_dt, end_dt, normalized.get("sport"))
         result = _workout_patterns(activities, details, normalized)
     else:
         result = _activity_trend(current_rows, normalized)
 
     result["analysis_id"] = result.get("analysis_id") or f"ana-{uuid.uuid4().hex[:10]}"
     result["context"] = normalized
-    result["coverage"] = _coverage(rows, current_rows, normalized, compare_rows=compare_rows)
+    result["coverage"] = _coverage(rows, current_rows, normalized, compare_rows=compare_rows, detail_stats=detail_stats)
     result["confidence"] = _confidence(result["coverage"], intent)
     result["follow_up_suggestions"] = _follow_up_suggestions(intent, normalized)
     return result
@@ -135,6 +149,7 @@ def build_activity_analysis_reply(result: dict[str, Any]) -> str:
     level = escape(str(confidence.get("level") or "low"))
     coverage = result.get("coverage") or {}
     sessions = coverage.get("sessions", 0)
+    source_label = escape(str(_data_source_label(coverage.get("effective_data_source"))))
     period = result.get("context") or {}
     start = escape(str(period.get("start_date") or "?"))
     end = escape(str(period.get("end_date") or "?"))
@@ -142,7 +157,7 @@ def build_activity_analysis_reply(result: dict[str, Any]) -> str:
         f"<b>{title}</b><br/>"
         f"{summary}<br/><br/>"
         f"<i>Ik heb er een grafiekkaart bij gezet. Datadekking: {sessions} sessies, "
-        f"{start} tot {end}, vertrouwen {level}.</i>"
+        f"{start} tot {end}, bron {source_label}, vertrouwen {level}.</i>"
     )
 
 
@@ -178,7 +193,8 @@ def _detect_intent(text: str) -> Optional[str]:
 def _looks_like_analysis_follow_up(text: str) -> bool:
     phrases = (
         "en", "ook", "zelfde", "die", "daarvan", "maak", "toon", "filter",
-        "alleen", "zonder", "meer detail", "per week", "per maand", "grafiek",
+        "alleen", "zonder", "meer detail", "details", "summary", "samenvatting",
+        "activitydetails", "laps", "samples", "per week", "per maand", "grafiek",
     )
     return len(text) < 80 and any(phrase in text for phrase in phrases)
 
@@ -187,6 +203,23 @@ def _detect_sport(text: str) -> Optional[str]:
     for sport, aliases in SPORT_ALIASES.items():
         if any(alias in text for alias in aliases):
             return sport
+    return None
+
+
+def _detect_data_source(text: str) -> Optional[str]:
+    if any(word in text for word in ("summary", "summaries", "samenvatting", "alleen activities")):
+        return "summary"
+    if any(
+        word in text
+        for word in (
+            "details", "detail", "activitydetails", "activity details", "laps",
+            "samples", "segmenten", "segment", "punten", "uit de activiteit zelf",
+            "niet summary", "niet enkel summary",
+        )
+    ):
+        return "details"
+    if "auto" in text or "beste bron" in text:
+        return "auto"
     return None
 
 
@@ -298,6 +331,7 @@ def _coerce_request(request: dict[str, Any], today: date) -> dict[str, Any]:
         "intent": intent,
         "message": request.get("message"),
         "sport": request.get("sport"),
+        "data_source": request.get("data_source") if request.get("data_source") in {"auto", "details", "summary"} else "auto",
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "compare_start_date": compare_start.isoformat() if compare_start else None,
@@ -353,19 +387,104 @@ def _load_activity_details(
     start: datetime,
     end: datetime,
     _sport: Optional[str],
+    summary_ids: Optional[list[str]] = None,
 ) -> list[GarminActivityAuxiliaryData]:
+    range_filter = GarminActivityAuxiliaryData.start_time >= start
+    range_filter = range_filter & (GarminActivityAuxiliaryData.start_time <= end)
+    if summary_ids:
+        range_filter = or_(range_filter, GarminActivityAuxiliaryData.summary_id.in_(summary_ids))
     query = (
         db.query(GarminActivityAuxiliaryData)
         .filter(GarminActivityAuxiliaryData.user_id == user_id)
         .filter(GarminActivityAuxiliaryData.summary_type == "activityDetails")
-        .filter(GarminActivityAuxiliaryData.start_time >= start)
-        .filter(GarminActivityAuxiliaryData.start_time <= end)
+        .filter(range_filter)
         .order_by(GarminActivityAuxiliaryData.start_time.asc())
     )
     return query.all()
 
 
-def _activity_row(activity: GarminActivityData) -> dict[str, Any]:
+def _analysis_rows(
+    activities: list[GarminActivityData],
+    details: list[GarminActivityAuxiliaryData],
+    requested_source: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    summary_rows = [_activity_row(activity) for activity in activities]
+    if requested_source == "summary":
+        return summary_rows, {
+            "requested_data_source": "summary",
+            "effective_data_source": "summary",
+            "detail_activities": 0,
+            "detail_segments": 0,
+            "fallback_summary_activities": len(summary_rows),
+        }
+
+    detail_rows: list[dict[str, Any]] = []
+    detail_activity_keys: set[str] = set()
+    detail_index = _build_detail_index(details)
+    for activity in activities:
+        sport = _normalize_sport(activity)
+        segments = _detail_segments_for_activity(activity, detail_index, sport)
+        if not segments:
+            detail_rows.append(_activity_row(activity, source="summary_fallback"))
+            continue
+        activity_key = _activity_key(activity)
+        detail_activity_keys.add(activity_key)
+        for index, segment in enumerate(segments):
+            detail_rows.append(_segment_row(activity, segment, index, sport))
+
+    detail_segments = sum(1 for row in detail_rows if row.get("source") == "activityDetails")
+    if detail_segments == 0:
+        return summary_rows, {
+            "requested_data_source": requested_source,
+            "effective_data_source": "summary",
+            "detail_activities": 0,
+            "detail_segments": 0,
+            "fallback_summary_activities": len(summary_rows),
+        }
+
+    return detail_rows, {
+        "requested_data_source": requested_source,
+        "effective_data_source": "activityDetails" if len(detail_activity_keys) == len(activities) else "mixed",
+        "detail_activities": len(detail_activity_keys),
+        "detail_segments": detail_segments,
+        "fallback_summary_activities": max(0, len(activities) - len(detail_activity_keys)),
+    }
+
+
+def _build_detail_index(details: list[GarminActivityAuxiliaryData]) -> dict[str, dict[str, Any]]:
+    try:
+        from app.api.garmin import _build_activity_detail_index
+
+        return _build_activity_detail_index(details)
+    except Exception:
+        index: dict[str, dict[str, Any]] = {}
+        for detail in details:
+            payload = _raw_payload(detail)
+            for key in [detail.summary_id, detail.activity_id, str(payload.get("summaryId") or ""), str(payload.get("activityId") or "")]:
+                if key:
+                    index[key] = payload
+        return index
+
+
+def _detail_segments_for_activity(
+    activity: GarminActivityData,
+    detail_index: dict[str, dict[str, Any]],
+    sport: str,
+) -> list[dict[str, Any]]:
+    try:
+        from app.api.garmin import _activity_detail_for, _segments_from_detail
+
+        detail = _activity_detail_for(activity, detail_index)
+        return _segments_from_detail(detail, sport) if detail else []
+    except Exception:
+        return []
+
+
+def _activity_row(activity: GarminActivityData, source: str = "summary") -> dict[str, Any]:
+    return _activity_row_from_values(activity, source=source)
+
+
+def _activity_row_from_values(activity: GarminActivityData, source: str = "summary") -> dict[str, Any]:
     duration_seconds = int(activity.duration or 0)
     distance_meters = float(activity.distance or 0)
     distance_km = distance_meters / 1000 if distance_meters else 0
@@ -375,9 +494,12 @@ def _activity_row(activity: GarminActivityData) -> dict[str, Any]:
     pace_min_km = (duration_seconds / 60 / distance_km) if distance_km else None
     return {
         "id": activity.id,
+        "activity_key": _activity_key(activity),
         "summary_id": activity.summary_id,
         "activity_id": activity.activity_id,
         "name": activity.activity_name or _sport_label(_normalize_sport(activity)),
+        "activity_name": activity.activity_name or _sport_label(_normalize_sport(activity)),
+        "segment_label": "Hele sessie",
         "sport": _normalize_sport(activity),
         "start_time": activity.start_time,
         "date": activity.start_time.date().isoformat() if activity.start_time else None,
@@ -391,7 +513,56 @@ def _activity_row(activity: GarminActivityData) -> dict[str, Any]:
         "speed_kmh": speed_kmh,
         "pace_min_km": pace_min_km,
         "load": _rough_load(duration_seconds, avg_hr, activity.max_heart_rate),
+        "source": source,
+        "sample_count": None,
     }
+
+
+def _segment_row(
+    activity: GarminActivityData,
+    segment: dict[str, Any],
+    index: int,
+    sport: str,
+) -> dict[str, Any]:
+    duration_seconds = int(segment.get("duration_seconds") or 0)
+    distance_meters = float(segment.get("distance_meters") or 0)
+    distance_km = distance_meters / 1000 if distance_meters else 0
+    duration_hours = duration_seconds / 3600 if duration_seconds else 0
+    avg_hr = round(segment["heart_rate"]) if segment.get("heart_rate") else None
+    speed_mps = segment.get("speed_mps")
+    speed_kmh = float(speed_mps) * 3.6 if speed_mps else ((distance_km / duration_hours) if duration_hours and distance_km else None)
+    pace_min_km = (duration_seconds / 60 / distance_km) if distance_km else None
+    activity_name = activity.activity_name or _sport_label(sport)
+    segment_label = f"Segment {index + 1}"
+    start_time = activity.start_time + timedelta(seconds=index) if activity.start_time else datetime.min
+    return {
+        "id": activity.id,
+        "activity_key": _activity_key(activity),
+        "summary_id": activity.summary_id,
+        "activity_id": activity.activity_id,
+        "name": f"{activity_name} · {segment_label}",
+        "activity_name": activity_name,
+        "segment_label": segment_label,
+        "sport": sport,
+        "start_time": start_time,
+        "date": activity.start_time.date().isoformat() if activity.start_time else None,
+        "duration_seconds": duration_seconds,
+        "duration_hours": duration_hours,
+        "duration_min": duration_seconds / 60 if duration_seconds else 0,
+        "distance_km": distance_km,
+        "calories": None,
+        "avg_hr": avg_hr,
+        "max_hr": activity.max_heart_rate,
+        "speed_kmh": speed_kmh,
+        "pace_min_km": pace_min_km,
+        "load": _rough_load(duration_seconds, avg_hr, activity.max_heart_rate),
+        "source": "activityDetails",
+        "sample_count": segment.get("sample_count"),
+    }
+
+
+def _activity_key(activity: GarminActivityData) -> str:
+    return str(activity.summary_id or activity.activity_id or activity.id)
 
 
 def _raw_payload(row: Any) -> dict[str, Any]:
@@ -573,6 +744,8 @@ def _pace_hr_correlation(rows: list[dict[str, Any]], request: dict[str, Any]) ->
             "label": row["name"],
             "date": row["date"],
             "distance_km": round(row["distance_km"], 1),
+            "duration_min": round(row["duration_min"], 1),
+            "source": row.get("source"),
         })
     corr = _correlation([p["x"] for p in points], [p["y"] for p in points])
     summary = "Te weinig sessies met hartslag en tempo om betrouwbaar te interpreteren."
@@ -584,7 +757,8 @@ def _pace_hr_correlation(rows: list[dict[str, Any]], request: dict[str, Any]) ->
         "title": f"{_sport_label(sport)}: tempo vs hartslag",
         "summary": summary,
         "metrics": [
-            {"label": "Sessies", "value": len(points)},
+            {"label": "Sessies", "value": len({str(row.get("activity_key") or row.get("id")) for row in relevant})},
+            {"label": "Datapunten", "value": len(points)},
             {"label": "Gem. HR", "value": _avg([p["y"] for p in points]), "unit": "bpm"},
             {"label": "Correlatie", "value": round(corr, 2) if corr is not None else "n.v.t."},
         ],
@@ -686,6 +860,7 @@ def _workout_patterns(
 
 def _group_rows(rows: list[dict[str, Any]], bucket: str) -> dict[str, dict[str, float]]:
     grouped: dict[str, dict[str, float]] = {}
+    activity_sets: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         if not row.get("start_time"):
             continue
@@ -695,17 +870,21 @@ def _group_rows(rows: list[dict[str, Any]], bucket: str) -> dict[str, dict[str, 
             week_start = row["start_time"].date() - timedelta(days=row["start_time"].weekday())
             key = week_start.isoformat()
         item = grouped.setdefault(key, {"sessions": 0, "distance_km": 0, "duration_hours": 0, "load": 0})
-        item["sessions"] += 1
+        activity_sets[key].add(str(row.get("activity_key") or row.get("id")))
         item["distance_km"] += row["distance_km"]
         item["duration_hours"] += row["duration_hours"]
         item["load"] += row["load"]
+    for key, activity_keys in activity_sets.items():
+        grouped[key]["sessions"] = len(activity_keys)
     return dict(sorted(grouped.items()))
 
 
 def _totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
     hrs = [row["avg_hr"] for row in rows if row.get("avg_hr")]
+    session_count = len({str(row.get("activity_key") or row.get("id")) for row in rows})
     return {
-        "sessions": len(rows),
+        "sessions": session_count,
+        "points": len(rows),
         "distance_km": sum(row["distance_km"] for row in rows),
         "duration_hours": sum(row["duration_hours"] for row in rows),
         "load": sum(row["load"] for row in rows),
@@ -714,12 +893,15 @@ def _totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _metric_tiles(totals: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
+    metrics = [
         {"label": "Sessies", "value": totals["sessions"]},
         {"label": "Afstand", "value": round(totals["distance_km"], 1), "unit": "km"},
         {"label": "Duur", "value": round(totals["duration_hours"], 1), "unit": "u"},
         {"label": "Load", "value": round(totals["load"], 1)},
     ]
+    if totals.get("points", totals["sessions"]) > totals["sessions"]:
+        metrics[-1] = {"label": "Punten", "value": totals["points"]}
+    return metrics
 
 
 def _coverage(
@@ -727,20 +909,30 @@ def _coverage(
     current_rows: list[dict[str, Any]],
     request: dict[str, Any],
     compare_rows: Optional[list[dict[str, Any]]] = None,
+    detail_stats: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     hr_rows = [row for row in current_rows if row.get("avg_hr")]
     distance_rows = [row for row in current_rows if row.get("distance_km", 0) > 0]
     start = _parse_date(request["start_date"])
     end = _parse_date(request["end_date"])
     days = ((end - start).days + 1) if start and end else None
+    session_count = len({str(row.get("activity_key") or row.get("id")) for row in current_rows})
+    compare_session_count = len({str(row.get("activity_key") or row.get("id")) for row in compare_rows or []})
+    detail_stats = detail_stats or {}
     return {
-        "sessions": len(current_rows),
+        "sessions": session_count,
+        "points": len(current_rows),
         "query_sessions": len(rows),
-        "compare_sessions": len(compare_rows or []),
+        "compare_sessions": compare_session_count,
         "days": days,
         "hr_coverage": round(len(hr_rows) / len(current_rows), 2) if current_rows else 0,
         "distance_coverage": round(len(distance_rows) / len(current_rows), 2) if current_rows else 0,
         "sport": request.get("sport"),
+        "requested_data_source": detail_stats.get("requested_data_source") or request.get("data_source") or "auto",
+        "effective_data_source": detail_stats.get("effective_data_source") or "summary",
+        "detail_activities": detail_stats.get("detail_activities", 0),
+        "detail_segments": detail_stats.get("detail_segments", 0),
+        "fallback_summary_activities": detail_stats.get("fallback_summary_activities", 0),
     }
 
 
@@ -799,6 +991,16 @@ def _activity_table(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _sport_label(sport: Optional[str]) -> str:
     return SPORT_LABELS.get(str(sport or "OTHER").upper(), str(sport or "Overig"))
+
+
+def _data_source_label(source: Optional[str]) -> str:
+    return {
+        "summary": "summary",
+        "activityDetails": "activityDetails",
+        "mixed": "activityDetails + summary fallback",
+        "auto": "auto",
+        "details": "activityDetails",
+    }.get(str(source or "summary"), str(source or "summary"))
 
 
 def _format_duration(seconds: int) -> str:

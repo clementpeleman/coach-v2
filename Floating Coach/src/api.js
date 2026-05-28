@@ -103,7 +103,7 @@
   function fetchWeeklyAnalysis(userId) {
     return getJson(`/garmin/analysis/weekly?user_id=${userId}`);
   }
-  function fetchActivityAnalysis({ userId, message, intent, startDate, endDate, sport, lastContext }) {
+  function fetchActivityAnalysis({ userId, message, intent, startDate, endDate, sport, dataSource, lastContext }) {
     return postJson('/analysis/activity', {
       user_id: userId,
       message: message || null,
@@ -111,6 +111,7 @@
       start_date: startDate || null,
       end_date: endDate || null,
       sport: sport || null,
+      data_source: dataSource || null,
       last_context: lastContext || null,
     });
   }

@@ -483,6 +483,8 @@ function AnalysisCard({ result, onSend }) {
   const confidence = result.confidence || {};
   const coverage = result.coverage || {};
   const suggestions = Array.isArray(result.follow_up_suggestions) ? result.follow_up_suggestions.slice(0, 3) : [];
+  const source = coverage.effective_data_source || result.context?.data_source || 'summary';
+  const sourceLabel = analysisSourceLabel(source);
   return (
     <div className="card tight" style={{
       width: 'min(760px, 100%)',
@@ -498,13 +500,45 @@ function AnalysisCard({ result, onSend }) {
             {result.summary}
           </p>
         </div>
-        <span className="tag" style={{
-          flexShrink: 0,
-          background: confidence.level === 'high' ? 'oklch(92% 0.16 145)' : confidence.level === 'medium' ? 'oklch(94% 0.10 95)' : 'var(--bg-soft)',
-          color: 'var(--ink)',
-        }}>
-          {confidence.label || confidence.level || 'indicatief'}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+          <span className="tag" style={{
+            background: confidence.level === 'high' ? 'oklch(92% 0.16 145)' : confidence.level === 'medium' ? 'oklch(94% 0.10 95)' : 'var(--bg-soft)',
+            color: 'var(--ink)',
+          }}>
+            {confidence.label || confidence.level || 'indicatief'}
+          </span>
+          <span className="mono" style={{ fontSize: 9, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em' }}>
+            {sourceLabel}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 14, alignItems: 'center' }}>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em', marginRight: 4 }}>
+          Databron
         </span>
+        {[
+          ['auto', 'Auto'],
+          ['details', 'ActivityDetails'],
+          ['summary', 'Summary'],
+        ].map(([key, label]) => (
+          <button key={key}
+            type="button"
+            onClick={() => onSend?.(key === 'details'
+              ? 'toon dezelfde analyse met activityDetails'
+              : key === 'summary'
+                ? 'toon dezelfde analyse met summary'
+                : 'toon dezelfde analyse met de beste bron')}
+            className="tag"
+            style={{
+              border: '1px solid var(--line)',
+              background: (result.context?.data_source || 'auto') === key ? 'var(--ink)' : 'transparent',
+              color: (result.context?.data_source || 'auto') === key ? 'var(--text-on-dark)' : 'var(--ink)',
+              cursor: 'pointer',
+            }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {metrics.length > 0 && (
@@ -540,7 +574,7 @@ function AnalysisCard({ result, onSend }) {
 
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.12em' }}>
-          {coverage.sessions ?? 0} sessies · HR dekking {Math.round((coverage.hr_coverage || 0) * 100)}%
+          {coverage.sessions ?? 0} sessies · {coverage.points ?? coverage.sessions ?? 0} punten · HR dekking {Math.round((coverage.hr_coverage || 0) * 100)}%
         </div>
         {suggestions.length > 0 && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -585,13 +619,25 @@ function LineChart({ chart }) {
     return [x, y];
   });
   const path = points.map((point, index) => `${index ? 'L' : 'M'}${point[0]},${point[1]}`).join(' ');
+  const unit = primary.unit || '';
+  const labels = chart.x || [];
   return (
     <div>
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 180, display: 'block' }} role="img" aria-label={chart.title || 'lijn grafiek'}>
         <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="var(--line-strong)" />
         <path d={path} fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((point, index) => (
-          <circle key={index} cx={point[0]} cy={point[1]} r="4" fill="var(--ink)" stroke="var(--accent)" strokeWidth="2" />
+          <g key={index}>
+            <circle cx={point[0]} cy={point[1]} r="4" fill="var(--ink)" stroke="var(--accent)" strokeWidth="2">
+              <title>{`${labels[index] || `Punt ${index + 1}`}: ${formatChartValue(values[index], unit)}`}</title>
+            </circle>
+            {values.length <= 14 && (
+              <text x={point[0]} y={Math.max(10, point[1] - 10)} textAnchor="middle"
+                style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fill: 'var(--ink-3)' }}>
+                {formatChartValue(values[index], unit)}
+              </text>
+            )}
+          </g>
         ))}
       </svg>
       <ChartLegend labels={chart.x || []} />
@@ -605,12 +651,16 @@ function BarChart({ chart }) {
   const values = primary.values.map(Number).filter((value) => Number.isFinite(value));
   if (!values.length) return <EmptyChart />;
   const max = Math.max(...values, 1);
+  const unit = primary.unit || '';
+  const labels = chart.x || [];
   return (
     <div>
       <div style={{ height: 180, display: 'grid', gridTemplateColumns: `repeat(${values.length}, minmax(28px, 1fr))`, gap: 8, alignItems: 'end' }}>
         {values.map((value, index) => (
-          <div key={index} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 6, minWidth: 0 }}>
-            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{value}</div>
+          <div key={index}
+            title={`${labels[index] || `Balk ${index + 1}`}: ${formatChartValue(value, unit)}`}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 6, minWidth: 0 }}>
+            <div className="mono" style={{ fontSize: 10, color: 'var(--ink-3)' }}>{formatChartValue(value, unit)}</div>
             <div style={{
               width: '100%',
               height: `${Math.max(7, (value / max) * 138)}px`,
@@ -646,10 +696,36 @@ function ScatterChart({ chart }) {
       {points.map((point, index) => {
         const x = pad + ((point.x - minX) / Math.max(1, maxX - minX)) * (w - pad * 2);
         const y = h - pad - ((point.y - minY) / Math.max(1, maxY - minY)) * (h - pad * 2);
-        return <circle key={index} cx={x} cy={y} r="5" fill="var(--accent)" stroke="var(--ink)" strokeWidth="1.5"><title>{point.label}</title></circle>;
+        return (
+          <g key={index}>
+            <circle cx={x} cy={y} r="5" fill="var(--accent)" stroke="var(--ink)" strokeWidth="1.5">
+              <title>{`${point.label || `Punt ${index + 1}`} · ${chart.xLabel || 'x'} ${point.x} · ${chart.yLabel || 'y'} ${point.y}${point.distance_km ? ` · ${point.distance_km} km` : ''}${point.duration_min ? ` · ${point.duration_min} min` : ''}`}</title>
+            </circle>
+            {points.length <= 12 && (
+              <text x={x} y={Math.max(10, y - 10)} textAnchor="middle"
+                style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fill: 'var(--ink-3)' }}>
+                {point.y}
+              </text>
+            )}
+          </g>
+        );
       })}
     </svg>
   );
+}
+
+function formatChartValue(value, unit) {
+  if (!Number.isFinite(Number(value))) return '-';
+  const rounded = Number(value) % 1 === 0 ? String(Number(value)) : Number(value).toFixed(1);
+  return unit ? `${rounded}${unit === 'u' || unit === 'km' ? unit : ` ${unit}`}` : rounded;
+}
+
+function analysisSourceLabel(source) {
+  if (source === 'activityDetails') return 'ActivityDetails';
+  if (source === 'mixed') return 'ActivityDetails + summary';
+  if (source === 'details') return 'ActivityDetails';
+  if (source === 'auto') return 'Auto';
+  return 'Summary';
 }
 
 function ChartLegend({ labels }) {

@@ -27,6 +27,7 @@ class ActivityAnalysisRequest(BaseModel):
     compare_end_date: Optional[str] = None
     sport: Optional[str] = None
     bucket: Optional[str] = None
+    data_source: Optional[str] = Field(default=None, description="auto, details, or summary")
     last_context: Optional[dict[str, Any]] = None
 
 
@@ -248,6 +249,7 @@ async def activity_analysis(
             "compare_start_date": payload.compare_start_date,
             "compare_end_date": payload.compare_end_date,
             "bucket": payload.bucket,
+            "data_source": payload.data_source,
         }
     if request is None:
         raise HTTPException(
