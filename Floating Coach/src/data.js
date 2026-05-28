@@ -94,6 +94,7 @@ window.FC_DATA = (() => {
     'Toon mijn afstand per week',
     'Vergelijk lopen met fietsen',
     'Tempo vs hartslag bij lopen',
+    'Hoe snel stijgt mijn HR in intervallen?',
     'Welke workoutpatronen heb ik?',
     'Wat train ik morgen?',
   ];

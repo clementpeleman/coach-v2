@@ -268,7 +268,7 @@ function ChatScreen({
 
         <div className="card tight">
           <div className="label" style={{ marginBottom: 12 }}>Coach toolkit</div>
-          {['Genereer workout', 'Analyseer trainingsweek', 'Vergelijk 30 dagen', 'Tempo vs hartslag', 'Workoutpatronen'].map((t) => (
+          {['Genereer workout', 'Analyseer trainingsweek', 'Vergelijk 30 dagen', 'Tempo vs hartslag', 'HR-respons in blokken', 'Workoutpatronen'].map((t) => (
             <div key={t} style={{
               padding: '10px 12px', borderRadius: 8, fontSize: 13,
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -467,7 +467,7 @@ function BigBubble({ m, onSend }) {
         borderRadius: isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
         fontSize: 15, lineHeight: 1.55,
         maxWidth: analysis ? 680 : '100%',
-      }} dangerouslySetInnerHTML={{ __html: m.content }} />
+      }} dangerouslySetInnerHTML={{ __html: isUser ? escapeHtml(m.content) : formatCoachContent(m.content) }} />
       {!isUser && analysis && <AnalysisCard result={analysis} onSend={onSend} />}
       <div className="mono" style={{ fontSize: 10, color: 'var(--ink-4)',
                                       letterSpacing: '.1em', textTransform: 'uppercase' }}>
@@ -598,9 +598,123 @@ function AnalysisCard({ result, onSend }) {
 }
 
 function AnalysisChart({ chart }) {
+  if (chart.type === 'dual_line') return <DualLineChart chart={chart} />;
   if (chart.type === 'scatter') return <ScatterChart chart={chart} />;
   if (chart.type === 'bar') return <BarChart chart={chart} />;
   return <LineChart chart={chart} />;
+}
+
+function DualLineChart({ chart }) {
+  const series = (chart.series || []).filter((item) => Array.isArray(item.values));
+  const primary = normaliseSeries(series[0]);
+  const secondary = normaliseSeries(series[1]);
+  const xValues = (chart.x || []).map(Number);
+  if (!primary.values.length && !secondary.values.length) return <EmptyChart />;
+  const w = 680;
+  const h = 220;
+  const padX = 34;
+  const padY = 22;
+  const xMin = Number.isFinite(Math.min(...xValues)) ? Math.min(...xValues) : 0;
+  const xMax = Number.isFinite(Math.max(...xValues)) ? Math.max(...xValues) : Math.max(primary.values.length, secondary.values.length, 1);
+  const xAt = (value, index) => {
+    const x = Number.isFinite(value) ? value : index;
+    return padX + ((x - xMin) / Math.max(1, xMax - xMin)) * (w - padX * 2);
+  };
+  const yAt = (value, meta) => {
+    if (!Number.isFinite(value)) return h - padY;
+    const ratio = (value - meta.min) / Math.max(1, meta.max - meta.min);
+    const plotted = meta.invert ? ratio : 1 - ratio;
+    return padY + plotted * (h - padY * 2);
+  };
+  const pathFor = (meta) => meta.values
+    .map((value, index) => {
+      if (!Number.isFinite(value)) return null;
+      return `${index ? 'L' : 'M'}${xAt(xValues[index], index)},${yAt(value, meta)}`;
+    })
+    .filter(Boolean)
+    .join(' ');
+  const primaryPath = pathFor(primary);
+  const secondaryPath = pathFor(secondary);
+  const blocks = Array.isArray(chart.blocks) ? chart.blocks : [];
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+        <LegendPill color="var(--accent)" label={`${primary.label || 'Hartslag'} (${primary.unit || ''})`} />
+        <LegendPill color="oklch(58% 0.10 220)" label={`${secondary.label || 'Tempo'} (${secondary.unit || ''})`} />
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 220, display: 'block' }} role="img" aria-label={chart.title || 'dubbele lijn grafiek'}>
+        <line x1={padX} y1={h - padY} x2={w - padX} y2={h - padY} stroke="var(--line-strong)" />
+        <line x1={padX} y1={padY} x2={padX} y2={h - padY} stroke="var(--line-strong)" />
+        {blocks.map((block, index) => {
+          const x = xAt(Number(block.start), 0);
+          const width = Math.max(2, xAt(Number(block.end), 0) - x);
+          const fill = block.kind === 'work' ? 'oklch(87% 0.15 80)' : block.kind === 'recovery' ? 'oklch(90% 0.06 220)' : 'oklch(94% 0.01 100)';
+          return (
+            <g key={`${block.label}-${index}`}>
+              <rect x={x} y={padY} width={width} height={h - padY * 2} fill={fill} opacity="0.34">
+                <title>{`${block.label || `Blok ${index + 1}`} · ${block.start}-${block.end} min`}</title>
+              </rect>
+              {width > 28 && (
+                <text x={x + width / 2} y={h - 6} textAnchor="middle"
+                  style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, fill: 'var(--ink-4)' }}>
+                  {block.label?.replace('Blok ', 'B') || `B${index + 1}`}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        {secondaryPath && <path d={secondaryPath} fill="none" stroke="oklch(58% 0.10 220)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />}
+        {primaryPath && <path d={primaryPath} fill="none" stroke="var(--accent)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />}
+        {primary.values.map((value, index) => {
+          if (!Number.isFinite(value)) return null;
+          if (index % Math.max(1, Math.ceil(primary.values.length / 18)) !== 0 && index !== primary.values.length - 1) return null;
+          const x = xAt(xValues[index], index);
+          const y = yAt(value, primary);
+          const secondaryValue = secondary.values[index];
+          return (
+            <g key={`p-${index}`}>
+              <circle cx={x} cy={y} r="3.5" fill="var(--ink)" stroke="var(--accent)" strokeWidth="2">
+                <title>{`${xValues[index] ?? index} min · ${primary.label}: ${formatChartValue(value, primary.unit)}${Number.isFinite(secondaryValue) ? ` · ${secondary.label}: ${formatChartValue(secondaryValue, secondary.unit)}` : ''}`}</title>
+              </circle>
+              {(index === 0 || index === primary.values.length - 1) && (
+                <text x={x} y={Math.max(12, y - 10)} textAnchor="middle"
+                  style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fill: 'var(--ink-3)' }}>
+                  {formatChartValue(value, primary.unit)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <ChartLegend labels={[`${xMin} min`, `${Math.round((xMin + xMax) / 2)} min`, `${xMax} min`]} />
+    </div>
+  );
+}
+
+function normaliseSeries(series) {
+  const values = ((series && series.values) || [])
+    .map((value) => value == null ? NaN : Number(value))
+    .map((value) => Number.isFinite(value) ? value : NaN);
+  const finite = values.filter((value) => Number.isFinite(value));
+  const min = finite.length ? Math.min(...finite) : 0;
+  const max = finite.length ? Math.max(...finite) : 1;
+  return {
+    label: series?.label || '',
+    unit: series?.unit || '',
+    invert: Boolean(series?.invert),
+    values,
+    min,
+    max: max === min ? max + 1 : max,
+  };
+}
+
+function LegendPill({ color, label }) {
+  return (
+    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+      <span style={{ width: 20, height: 3, borderRadius: 999, background: color, display: 'inline-block' }}></span>
+      {label}
+    </span>
+  );
 }
 
 function LineChart({ chart }) {
@@ -781,6 +895,81 @@ function AnalysisTable({ table }) {
       </table>
     </div>
   );
+}
+
+function formatCoachContent(content) {
+  const raw = String(content || '');
+  if (!raw.trim()) return '';
+  if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
+    return sanitiseCoachHtml(raw)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  }
+  return markdownToHtml(raw);
+}
+
+function sanitiseCoachHtml(raw) {
+  return String(raw || '')
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+    .replace(/\son\w+=(["']).*?\1/gi, '')
+    .replace(/\shref=(["'])javascript:.*?\1/gi, '')
+    .replace(/\n{2,}/g, '<br/><br/>')
+    .replace(/\n/g, '<br/>');
+}
+
+function markdownToHtml(raw) {
+  const lines = escapeHtml(raw.trim()).split(/\n/);
+  const html = [];
+  let listType = null;
+  const closeList = () => {
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      html.push('<br/>');
+      return;
+    }
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (bullet || numbered) {
+      const nextType = bullet ? 'ul' : 'ol';
+      if (listType !== nextType) {
+        closeList();
+        html.push(`<${nextType}>`);
+        listType = nextType;
+      }
+      html.push(`<li>${inlineMarkdown(bullet ? bullet[1] : numbered[1])}</li>`);
+      return;
+    }
+    closeList();
+    html.push(`<p>${inlineMarkdown(trimmed)}</p>`);
+  });
+  closeList();
+  return html.join('');
+}
+
+function inlineMarkdown(text) {
+  return String(text || '')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/(^|[\s(])_([^_\n]+)_/g, '$1<em>$2</em>');
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function ThinkDot({ d }) {

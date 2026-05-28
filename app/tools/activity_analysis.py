@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
@@ -62,6 +63,7 @@ def detect_activity_analysis_request(
             request["wants_chart"] = True
         coerced = _coerce_request(request, today=today)
         coerced["needs_coach_answer"] = analysis_request_needs_coach_answer(message, coerced)
+        coerced["attach_card"] = _should_attach_analysis_card(text, coerced, follow_up=True)
         return coerced
 
     intent = _detect_intent(text)
@@ -90,6 +92,7 @@ def detect_activity_analysis_request(
         today=today,
     )
     request["needs_coach_answer"] = analysis_request_needs_coach_answer(message, request)
+    request["attach_card"] = _should_attach_analysis_card(text, request, follow_up=False)
     return request
 
 
@@ -130,6 +133,8 @@ def build_activity_analysis(
         result = _sport_breakdown(current_rows, normalized)
     elif intent == "pace_hr_correlation":
         result = _pace_hr_correlation(current_rows, normalized)
+    elif intent == "hr_response_kinetics":
+        result = _hr_response_kinetics(activities, details, normalized)
     elif intent == "personal_records":
         result = _personal_records(current_summary_rows, normalized)
     elif intent == "workout_pattern_analysis":
@@ -139,7 +144,9 @@ def build_activity_analysis(
 
     result["analysis_id"] = result.get("analysis_id") or f"ana-{uuid.uuid4().hex[:10]}"
     result["context"] = normalized
-    result["coverage"] = _coverage(rows, current_rows, normalized, compare_rows=compare_rows, detail_stats=detail_stats)
+    coverage = _coverage(rows, current_rows, normalized, compare_rows=compare_rows, detail_stats=detail_stats)
+    coverage.update(result.pop("_coverage_overrides", {}) or {})
+    result["coverage"] = coverage
     result["confidence"] = _confidence(result["coverage"], intent)
     result["follow_up_suggestions"] = _follow_up_suggestions(intent, normalized)
     return result
@@ -199,6 +206,7 @@ def summarize_activity_analysis_for_prompt(result: dict[str, Any]) -> str:
     rows = table.get("rows") or []
     points = chart.get("points") or []
     efficiency = result.get("efficiency_rank") or {}
+    findings = result.get("coach_findings") or []
 
     lines = [
         f"Titel: {result.get('title')}",
@@ -239,6 +247,8 @@ def summarize_activity_analysis_for_prompt(result: dict[str, Any]) -> str:
             "Tabelrijen: "
             + "; ".join(" | ".join(str(cell) for cell in row) for row in rows[:8] if isinstance(row, list))
         )
+    if findings:
+        lines.append("Coach findings: " + "; ".join(str(item) for item in findings[:8]))
     lines.append(
         "Antwoord als coach in het Nederlands. Geef eerst de interpretatie op de vraag. "
         "Herhaal niet alleen dat er een grafiekkaart is. Wees voorzichtig met medische conclusies."
@@ -248,6 +258,20 @@ def summarize_activity_analysis_for_prompt(result: dict[str, Any]) -> str:
 
 def _deterministic_analysis_answer(result: dict[str, Any], message: str) -> Optional[str]:
     intent = result.get("intent")
+    if intent == "hr_response_kinetics":
+        metrics = {item.get("label"): item.get("value") for item in result.get("metrics", []) if isinstance(item, dict)}
+        findings = result.get("coach_findings") or []
+        findings_html = "".join(f"<li>{escape(str(item))}</li>" for item in findings[:4])
+        if not findings_html:
+            findings_html = "<li>Er zijn nog te weinig ActivityDetails-samples om blokrespons betrouwbaar te meten.</li>"
+        return (
+            "<b>HR-respons binnen je training</b><br/>"
+            "Ik kijk hier niet naar de sessiesummary, maar naar samples/laps binnen de activiteit: "
+            "hoe snel je hartslag stijgt na versnellen, en hoe goed ze zakt na een rustiger blok.<br/><br/>"
+            f"<ul>{findings_html}</ul>"
+            f"<i>Gemiddelde lag: {escape(str(metrics.get('Gem. lag') or 'n.v.t.'))} sec. "
+            f"Snelste stijging: {escape(str(metrics.get('Snelste stijging') or 'n.v.t.'))} bpm/min.</i>"
+        )
     if intent != "pace_hr_correlation":
         return None
 
@@ -304,10 +328,14 @@ def _detect_intent(text: str) -> Optional[str]:
         "activiteiten", "activiteit", "trainingen", "trainingsweek", "week",
         "trend", "evolutie", "vergelijk", "record", "records", "patroon", "patronen",
         "correlatie", "effici", "hartslag", "tempo", "pace", "snelheid",
-        "afstand", "volume", "belasting", "progressie",
+        "afstand", "volume", "belasting", "progressie", "blok", "blokken",
+        "interval", "intervallen", "respons", "response", "vertraging", "lag",
+        "stijgt", "stijgen", "zakt", "daalt",
     )
     if not any(word in text for word in analysis_words):
         return None
+    if _looks_like_hr_response_question(text):
+        return "hr_response_kinetics"
     if any(word in text for word in ("sportverdeling", "verdeling", "per sport", "loop vs fiets", "fietsen vs lopen")):
         return "sport_breakdown"
     if any(word in text for word in ("correlatie", "effici", "hartslag", "bpm", "pace", "tempo", "snelheid")):
@@ -327,13 +355,65 @@ def _detect_intent(text: str) -> Optional[str]:
     return None
 
 
+def _looks_like_hr_response_question(text: str) -> bool:
+    has_hr = any(word in text for word in ("hartslag", "bpm", "hr", "heart rate"))
+    has_response = any(
+        word in text
+        for word in (
+            "stijgt", "stijgen", "zakt", "zakken", "daalt", "dalen",
+            "respons", "response", "vertraging", "lag", "reageert", "reactie",
+            "snel", "hoe snel", "herstel na", "recovery drop",
+        )
+    )
+    has_block_context = any(
+        word in text
+        for word in (
+            "blok", "blokken", "interval", "intervallen", "tempo verandering",
+            "tempoverandering", "snelheidsverandering", "verschillende blokken",
+            "doorheen training", "binnen training",
+        )
+    )
+    return has_hr and has_response and has_block_context
+
+
+def _should_attach_analysis_card(text: str, request: dict[str, Any], follow_up: bool) -> bool:
+    explicit_visual = any(
+        word in text
+        for word in (
+            "grafiek", "chart", "kaart", "toon", "laat zien", "visualiseer",
+            "plot", "zelfde analyse", "activitydetails", "activity details",
+            "summary", "samenvatting", "beste bron",
+        )
+    )
+    if explicit_visual:
+        return True
+    if follow_up:
+        return False
+    if not request.get("needs_coach_answer"):
+        return True
+    interpretation_only = any(
+        word in text
+        for word in (
+            "waarom", "hoezo", "hoe komt", "waardoor", "verklaar", "betekent",
+            "wat zegt", "welke", "advies", "is dit normaal",
+        )
+    )
+    return not interpretation_only
+
+
 def _looks_like_analysis_follow_up(text: str) -> bool:
     phrases = (
-        "en", "ook", "zelfde", "die", "daarvan", "maak", "toon", "filter",
+        "ook", "zelfde", "daarvan", "maak", "toon", "filter",
         "alleen", "zonder", "meer detail", "details", "summary", "samenvatting",
         "activitydetails", "laps", "samples", "per week", "per maand", "grafiek",
     )
-    return len(text) < 80 and any(phrase in text for phrase in phrases)
+    if len(text) >= 80:
+        return False
+    if "effici" in text or "welke sessies" in text:
+        return True
+    if re.search(r"\b(en|die)\b", text):
+        return True
+    return any(phrase in text for phrase in phrases)
 
 
 def _detect_sport(text: str) -> Optional[str]:
@@ -474,6 +554,8 @@ def _coerce_request(request: dict[str, Any], today: date) -> dict[str, Any]:
         "compare_start_date": compare_start.isoformat() if compare_start else None,
         "compare_end_date": compare_end.isoformat() if compare_end else None,
         "bucket": request.get("bucket") or ("week" if (end - start).days > 21 else "day"),
+        "needs_coach_answer": bool(request.get("needs_coach_answer")),
+        "attach_card": bool(request.get("attach_card", True)),
     }
 
 
@@ -912,6 +994,158 @@ def _pace_hr_correlation(rows: list[dict[str, Any]], request: dict[str, Any]) ->
     }
 
 
+def _hr_response_kinetics(
+    activities: list[GarminActivityData],
+    details: list[GarminActivityAuxiliaryData],
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    sport = request.get("sport")
+    detail_index = _build_detail_index(details)
+    candidates: list[dict[str, Any]] = []
+    for activity in sorted(activities, key=lambda item: item.start_time or datetime.min, reverse=True):
+        normalized_sport = _normalize_sport(activity)
+        if sport and normalized_sport != sport:
+            continue
+        detail = _detail_payload_for_activity(activity, detail_index)
+        series = _sample_series(activity, detail, normalized_sport) if detail else []
+        if len(series) >= 24:
+            candidates.append({
+                "activity": activity,
+                "sport": normalized_sport,
+                "detail": detail,
+                "series": series,
+            })
+
+    if not candidates:
+        return {
+            "intent": "hr_response_kinetics",
+            "title": "HR-respons binnen training",
+            "summary": "Ik heb hiervoor ActivityDetails-samples nodig; die ontbreken nog voor de gekozen periode/sport.",
+            "metrics": [
+                {"label": "Sessies", "value": 0},
+                {"label": "Samples", "value": 0},
+                {"label": "Blokken", "value": 0},
+                {"label": "Gem. lag", "value": "n.v.t.", "unit": "sec"},
+            ],
+            "chart": None,
+            "table": {"columns": ["Blok", "Duur", "Tempo/snelheid", "HR", "Stijging", "Lag", "Herstel 60s"], "rows": []},
+            "coach_findings": [
+                "Zet Activity Details-webhook aan en importeer activityDetails; summaries zijn te grof voor HR-respons per blok.",
+            ],
+            "_coverage_overrides": {
+                "sessions": 0,
+                "points": 0,
+                "sample_points": 0,
+                "blocks": 0,
+                "effective_data_source": "summary",
+            },
+        }
+
+    # Prefer the latest activity that actually has multiple meaningful blocks.
+    analysed = None
+    for candidate in candidates:
+        blocks = _response_blocks(candidate["series"], candidate["detail"])
+        block_stats = _block_response_stats(blocks, candidate["series"], candidate["sport"])
+        meaningful = [block for block in block_stats if block.get("duration_seconds", 0) >= 45]
+        if len(meaningful) >= 3:
+            analysed = {**candidate, "blocks": blocks, "block_stats": meaningful}
+            break
+    if analysed is None:
+        candidate = candidates[0]
+        blocks = _response_blocks(candidate["series"], candidate["detail"])
+        analysed = {
+            **candidate,
+            "blocks": blocks,
+            "block_stats": _block_response_stats(blocks, candidate["series"], candidate["sport"]),
+        }
+
+    activity = analysed["activity"]
+    sport = analysed["sport"]
+    series = analysed["series"]
+    block_stats = analysed["block_stats"]
+    pace_sport = sport in {"RUNNING", "WALKING", "SWIMMING"}
+    lag_values = [item["lag_seconds"] for item in block_stats if item.get("lag_seconds") is not None]
+    rise_values = [item["rise_bpm_per_min"] for item in block_stats if item.get("rise_bpm_per_min") is not None]
+    recovery_values = [item["recovery_drop_60s"] for item in block_stats if item.get("recovery_drop_60s") is not None]
+    drift_values = [item["drift_bpm"] for item in block_stats if item.get("drift_bpm") is not None]
+    fastest = max(rise_values) if rise_values else None
+    avg_lag = _avg(lag_values)
+    avg_recovery = _avg(recovery_values)
+    max_drift = max(drift_values) if drift_values else None
+    title = f"{_sport_label(sport)}: HR-respons per blok"
+    activity_name = activity.activity_name or _sport_label(sport)
+    summary = (
+        f"Ik analyseer {activity_name}: {len(block_stats)} blokken met samples. "
+        "Dit toont hoe HR reageert op tempo/snelheidswissels binnen de training."
+    )
+    findings = _response_findings(block_stats, pace_sport)
+    chart_points = _thin_series(series, max_points=120)
+    metric_values = [
+        item["pace_min_km"] if pace_sport else item["speed_kmh"]
+        for item in chart_points
+    ]
+    metric_unit = "min/km" if pace_sport else "km/u"
+    chart = {
+        "type": "dual_line",
+        "title": "Hartslag vs tempo doorheen sessie",
+        "xLabel": "min",
+        "x": [round(item["elapsed_s"] / 60, 1) for item in chart_points],
+        "series": [
+            {"label": "Hartslag", "unit": "bpm", "values": [item["hr"] for item in chart_points]},
+            {
+                "label": "Tempo" if pace_sport else "Snelheid",
+                "unit": metric_unit,
+                "values": [round(value, 2) if value is not None else None for value in metric_values],
+                "invert": pace_sport,
+            },
+        ],
+        "blocks": [
+            {
+                "start": round(item["start_s"] / 60, 1),
+                "end": round(item["end_s"] / 60, 1),
+                "label": item["label"],
+                "kind": item.get("kind") or "steady",
+            }
+            for item in block_stats[:18]
+        ],
+    }
+    return {
+        "intent": "hr_response_kinetics",
+        "title": title,
+        "summary": summary,
+        "metrics": [
+            {"label": "Blokken", "value": len(block_stats)},
+            {"label": "Samples", "value": len(series)},
+            {"label": "Gem. lag", "value": avg_lag if avg_lag is not None else "n.v.t.", "unit": "sec"},
+            {"label": "Snelste stijging", "value": round(fastest, 1) if fastest is not None else "n.v.t.", "unit": "bpm/min"},
+            {"label": "Herstel 60s", "value": avg_recovery if avg_recovery is not None else "n.v.t.", "unit": "bpm"},
+            {"label": "Max drift", "value": round(max_drift, 1) if max_drift is not None else "n.v.t.", "unit": "bpm"},
+        ],
+        "chart": chart,
+        "table": {
+            "columns": ["Blok", "Duur", "Tempo/snelheid", "HR", "Stijging", "Lag", "Herstel 60s"],
+            "rows": [_response_table_row(item, pace_sport) for item in block_stats[:12]],
+        },
+        "coach_findings": findings,
+        "_coverage_overrides": {
+            "sessions": 1,
+            "points": len(block_stats),
+            "sample_points": len(series),
+            "blocks": len(block_stats),
+            "effective_data_source": "activityDetails",
+            "detail_segments": len(block_stats),
+            "hr_coverage": round(
+                len([item for item in series if item.get("hr") is not None]) / max(1, len(series)),
+                2,
+            ),
+            "distance_coverage": round(
+                len([item for item in series if item.get("distance_m") is not None]) / max(1, len(series)),
+                2,
+            ),
+        },
+    }
+
+
 def _personal_records(rows: list[dict[str, Any]], request: dict[str, Any]) -> dict[str, Any]:
     candidates = [row for row in rows if row["duration_seconds"] > 0]
     longest = sorted(candidates, key=lambda row: row["distance_km"], reverse=True)[:5]
@@ -1031,6 +1265,333 @@ def _workout_patterns(
     }
 
 
+def _detail_payload_for_activity(
+    activity: GarminActivityData,
+    detail_index: dict[str, dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    try:
+        from app.api.garmin import _activity_detail_for
+
+        return _activity_detail_for(activity, detail_index)
+    except Exception:
+        for key in [activity.activity_id, activity.summary_id, str(activity.summary_id).replace("-detail", "") if activity.summary_id else None]:
+            if key is not None and str(key) in detail_index:
+                return detail_index[str(key)]
+    return None
+
+
+def _sample_series(
+    activity: GarminActivityData,
+    detail: dict[str, Any],
+    sport: str,
+) -> list[dict[str, Any]]:
+    samples = sorted(
+        [sample for sample in detail.get("samples", []) if isinstance(sample, dict) and sample.get("startTimeInSeconds")],
+        key=lambda sample: sample.get("startTimeInSeconds"),
+    )
+    if len(samples) < 2:
+        return []
+    first_start = samples[0].get("startTimeInSeconds")
+    rows: list[dict[str, Any]] = []
+    previous: Optional[dict[str, Any]] = None
+    for sample in samples:
+        elapsed = _sample_elapsed_seconds(sample, first_start)
+        if elapsed is None:
+            continue
+        hr = _number(sample.get("heartRate") or sample.get("heartRateInBeatsPerMinute"))
+        distance_m = _first_number(sample, "totalDistanceInMeters", "distanceInMeters")
+        speed_mps = _first_number(
+            sample,
+            "speedMetersPerSecond",
+            "enhancedSpeedMetersPerSecond",
+            "averageSpeedInMetersPerSecond",
+        )
+        if not speed_mps and previous and distance_m is not None and previous.get("distance_m") is not None:
+            delta_t = elapsed - previous["elapsed_s"]
+            delta_d = distance_m - previous["distance_m"]
+            if delta_t > 0 and delta_d >= 0:
+                speed_mps = delta_d / delta_t
+        speed_kmh = speed_mps * 3.6 if speed_mps is not None else None
+        pace_min_km = (1000 / speed_mps / 60) if speed_mps and speed_mps > 0 else None
+        if sport == "SWIMMING" and speed_mps and speed_mps > 0:
+            pace_min_km = (100 / speed_mps / 60)
+        row = {
+            "elapsed_s": float(elapsed),
+            "hr": int(round(hr)) if hr is not None else None,
+            "distance_m": distance_m,
+            "speed_mps": speed_mps,
+            "speed_kmh": speed_kmh,
+            "pace_min_km": pace_min_km,
+        }
+        rows.append(row)
+        previous = row
+    return _smooth_sample_series(rows)
+
+
+def _smooth_sample_series(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(rows) < 5:
+        return rows
+    smoothed = []
+    for index, row in enumerate(rows):
+        window = rows[max(0, index - 2): min(len(rows), index + 3)]
+        speed_values = [item["speed_mps"] for item in window if item.get("speed_mps") is not None]
+        hr_values = [item["hr"] for item in window if item.get("hr") is not None]
+        next_row = dict(row)
+        if speed_values:
+            speed_mps = sum(speed_values) / len(speed_values)
+            next_row["speed_mps"] = speed_mps
+            next_row["speed_kmh"] = speed_mps * 3.6
+            next_row["pace_min_km"] = (1000 / speed_mps / 60) if speed_mps > 0 else None
+        if hr_values:
+            next_row["hr"] = int(round(sum(hr_values) / len(hr_values)))
+        smoothed.append(next_row)
+    return smoothed
+
+
+def _sample_elapsed_seconds(sample: dict[str, Any], first_start: Optional[int]) -> Optional[float]:
+    for key in ("timerDurationInSeconds", "movingDurationInSeconds", "clockDurationInSeconds"):
+        value = _number(sample.get(key))
+        if value is not None:
+            return float(value)
+    start = _number(sample.get("startTimeInSeconds"))
+    if start is not None and first_start is not None:
+        return float(start - first_start)
+    return None
+
+
+def _response_blocks(series: list[dict[str, Any]], detail: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    laps = sorted(
+        [
+            _number(lap.get("startTimeInSeconds"))
+            for lap in detail.get("laps", [])
+            if isinstance(lap, dict) and lap.get("startTimeInSeconds") is not None
+        ]
+    )
+    first_abs = None
+    raw_samples = sorted(
+        [sample for sample in detail.get("samples", []) if isinstance(sample, dict) and sample.get("startTimeInSeconds")],
+        key=lambda sample: sample.get("startTimeInSeconds"),
+    )
+    if raw_samples:
+        first_abs = _number(raw_samples[0].get("startTimeInSeconds"))
+    if first_abs is not None and len(laps) >= 2:
+        boundaries = [float(lap - first_abs) for lap in laps if lap >= first_abs]
+        boundaries = sorted(set([0.0, *boundaries, series[-1]["elapsed_s"] + 1]))
+        blocks = []
+        for start, end in zip(boundaries, boundaries[1:]):
+            block = [item for item in series if start <= item["elapsed_s"] < end]
+            if len(block) >= 2:
+                blocks.append(block)
+        if len(blocks) >= 2:
+            return blocks
+
+    # Fallback: infer coarse blocks from speed shifts. This is deliberately conservative;
+    # it avoids pretending we know exact workout steps when Garmin laps are missing.
+    blocks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_speed: Optional[float] = None
+    for item in series:
+        speed = item.get("speed_mps")
+        if not current:
+            current = [item]
+            current_speed = speed
+            continue
+        duration = item["elapsed_s"] - current[0]["elapsed_s"]
+        speed_changed = (
+            speed is not None
+            and current_speed is not None
+            and duration >= 75
+            and abs(speed - current_speed) / max(current_speed, 0.2) >= 0.22
+        )
+        long_block = duration >= 5 * 60
+        if speed_changed or long_block:
+            if len(current) >= 2:
+                blocks.append(current)
+            current = [item]
+            current_speed = speed
+        else:
+            current.append(item)
+            speeds = [row["speed_mps"] for row in current if row.get("speed_mps") is not None]
+            if speeds:
+                current_speed = sum(speeds) / len(speeds)
+    if len(current) >= 2:
+        blocks.append(current)
+    return blocks
+
+
+def _block_response_stats(
+    blocks: list[list[dict[str, Any]]],
+    series: list[dict[str, Any]],
+    sport: str,
+) -> list[dict[str, Any]]:
+    speed_values = [item["speed_mps"] for item in series if item.get("speed_mps") is not None]
+    median_speed = _median(speed_values) or 0
+    stats: list[dict[str, Any]] = []
+    previous_speed: Optional[float] = None
+    for index, block in enumerate(blocks):
+        if len(block) < 2:
+            continue
+        start_s = block[0]["elapsed_s"]
+        end_s = block[-1]["elapsed_s"]
+        duration = max(0.0, end_s - start_s)
+        if duration < 30:
+            continue
+        hr_values = [item["hr"] for item in block if item.get("hr") is not None]
+        speed_block = [item["speed_mps"] for item in block if item.get("speed_mps") is not None]
+        if not hr_values or not speed_block:
+            continue
+        avg_speed = sum(speed_block) / len(speed_block)
+        start_hr = _median([item["hr"] for item in block[:max(2, min(5, len(block)))] if item.get("hr") is not None])
+        end_hr = _median([item["hr"] for item in block[-max(2, min(5, len(block))):] if item.get("hr") is not None])
+        first_half = [item["hr"] for item in block[: max(1, len(block) // 2)] if item.get("hr") is not None]
+        second_half = [item["hr"] for item in block[max(1, len(block) // 2):] if item.get("hr") is not None]
+        rise = (end_hr - start_hr) if start_hr is not None and end_hr is not None else None
+        rise_per_min = (rise / (duration / 60)) if rise is not None and rise > 0 and duration > 0 else None
+        tempo_change = None
+        lag = None
+        if previous_speed is not None and previous_speed > 0:
+            tempo_change = ((avg_speed - previous_speed) / previous_speed) * 100
+            if tempo_change >= 8 and rise is not None and rise >= 4 and start_hr is not None:
+                threshold = start_hr + max(4, rise * 0.5)
+                reached = next((item for item in block if item.get("hr") is not None and item["hr"] >= threshold), None)
+                if reached:
+                    lag = max(0, round(reached["elapsed_s"] - start_s))
+        next_60 = [
+            item for item in series
+            if end_s < item["elapsed_s"] <= end_s + 60 and item.get("hr") is not None
+        ]
+        recovery_drop = None
+        next_speeds = [item["speed_mps"] for item in next_60 if item.get("speed_mps") is not None]
+        next_is_easier = bool(next_speeds) and (sum(next_speeds) / len(next_speeds)) <= avg_speed * 0.9
+        if next_60 and end_hr is not None and next_is_easier:
+            recovery_drop = round(end_hr - next_60[-1]["hr"], 1)
+        drift = None
+        if duration >= 6 * 60 and first_half and second_half:
+            drift = round((sum(second_half) / len(second_half)) - (sum(first_half) / len(first_half)), 1)
+        kind = "work" if avg_speed >= median_speed * 1.07 else "recovery" if avg_speed <= median_speed * 0.88 else "steady"
+        stats.append({
+            "label": f"Blok {len(stats) + 1}",
+            "start_s": start_s,
+            "end_s": end_s,
+            "duration_seconds": duration,
+            "avg_hr": round(sum(hr_values) / len(hr_values), 1),
+            "start_hr": round(start_hr, 1) if start_hr is not None else None,
+            "end_hr": round(end_hr, 1) if end_hr is not None else None,
+            "peak_hr": max(hr_values),
+            "rise_bpm": round(rise, 1) if rise is not None else None,
+            "rise_bpm_per_min": round(rise_per_min, 1) if rise_per_min is not None else None,
+            "lag_seconds": lag,
+            "recovery_drop_60s": recovery_drop,
+            "drift_bpm": drift,
+            "tempo_change_pct": round(tempo_change, 1) if tempo_change is not None else None,
+            "speed_kmh": round(avg_speed * 3.6, 1),
+            "pace_min_km": round((1000 / avg_speed / 60), 2) if avg_speed > 0 and sport != "SWIMMING" else (
+                round((100 / avg_speed / 60), 2) if avg_speed > 0 and sport == "SWIMMING" else None
+            ),
+            "kind": kind,
+        })
+        previous_speed = avg_speed
+    return stats
+
+
+def _response_findings(blocks: list[dict[str, Any]], pace_sport: bool) -> list[str]:
+    findings = []
+    rising = [block for block in blocks if block.get("rise_bpm_per_min") is not None]
+    lagged = [block for block in blocks if block.get("lag_seconds") is not None]
+    recovery = [block for block in blocks if block.get("recovery_drop_60s") is not None]
+    drift = [block for block in blocks if block.get("drift_bpm") is not None]
+    if rising:
+        fastest = max(rising, key=lambda item: item["rise_bpm_per_min"])
+        target = _format_response_metric(fastest, pace_sport)
+        findings.append(
+            f"{fastest['label']} heeft de snelste HR-stijging: {fastest['rise_bpm_per_min']} bpm/min bij {target}."
+        )
+    if lagged:
+        avg_lag = _avg([block["lag_seconds"] for block in lagged])
+        findings.append(
+            f"Na duidelijke tempoverhogingen duurt het gemiddeld ongeveer {avg_lag} sec voor je HR half mee is."
+        )
+    if recovery:
+        best = max(recovery, key=lambda item: item["recovery_drop_60s"])
+        worst = min(recovery, key=lambda item: item["recovery_drop_60s"])
+        findings.append(
+            f"Beste 60s-HR-daling na een blok: {best['recovery_drop_60s']} bpm; traagste: {worst['recovery_drop_60s']} bpm."
+        )
+    if drift:
+        max_drift = max(drift, key=lambda item: item["drift_bpm"])
+        if max_drift["drift_bpm"] > 5:
+            findings.append(
+                f"{max_drift['label']} toont cardiac drift: +{max_drift['drift_bpm']} bpm in de tweede helft."
+            )
+    if not findings:
+        findings.append("Er zijn samples gevonden, maar weinig duidelijke tempo/HR-wissels; beschouw dit als verkennend.")
+    return findings
+
+
+def _response_table_row(block: dict[str, Any], pace_sport: bool) -> list[Any]:
+    hr_text = "-"
+    if block.get("start_hr") is not None and block.get("end_hr") is not None:
+        hr_text = f"{block['start_hr']:.0f}->{block['end_hr']:.0f} ({block.get('peak_hr', '-')} max)"
+    rise = f"{block['rise_bpm_per_min']} bpm/min" if block.get("rise_bpm_per_min") is not None else "-"
+    lag = f"{block['lag_seconds']}s" if block.get("lag_seconds") is not None else "-"
+    recovery = f"{block['recovery_drop_60s']} bpm" if block.get("recovery_drop_60s") is not None else "-"
+    return [
+        block.get("label"),
+        _format_duration(int(block.get("duration_seconds") or 0)),
+        _format_response_metric(block, pace_sport),
+        hr_text,
+        rise,
+        lag,
+        recovery,
+    ]
+
+
+def _format_response_metric(block: dict[str, Any], pace_sport: bool) -> str:
+    if pace_sport:
+        return _format_pace(block.get("pace_min_km"))
+    speed = block.get("speed_kmh")
+    return f"{speed:.1f} km/u" if isinstance(speed, (int, float)) else "-"
+
+
+def _thin_series(series: list[dict[str, Any]], max_points: int = 120) -> list[dict[str, Any]]:
+    if len(series) <= max_points:
+        return series
+    step = max(1, math.ceil(len(series) / max_points))
+    thinned = series[::step]
+    if thinned[-1] is not series[-1]:
+        thinned.append(series[-1])
+    return thinned
+
+
+def _number(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _first_number(source: dict[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        if key in source:
+            value = _number(source.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _median(values: list[float]) -> Optional[float]:
+    clean = sorted(float(value) for value in values if value is not None and math.isfinite(float(value)))
+    if not clean:
+        return None
+    middle = len(clean) // 2
+    if len(clean) % 2:
+        return clean[middle]
+    return (clean[middle - 1] + clean[middle]) / 2
+
+
 def _group_rows(rows: list[dict[str, Any]], bucket: str) -> dict[str, dict[str, float]]:
     grouped: dict[str, dict[str, float]] = {}
     activity_sets: dict[str, set[str]] = defaultdict(set)
@@ -1113,7 +1674,14 @@ def _confidence(coverage: dict[str, Any], intent: str) -> dict[str, Any]:
     sessions = coverage.get("sessions", 0)
     hr_coverage = coverage.get("hr_coverage", 0)
     level = "low"
-    if sessions >= 18 and (intent not in {"pace_hr_correlation"} or hr_coverage >= 0.7):
+    if intent == "hr_response_kinetics":
+        sample_points = coverage.get("sample_points", 0)
+        blocks = coverage.get("blocks", 0)
+        if sample_points >= 180 and blocks >= 4 and hr_coverage >= 0.75:
+            level = "high"
+        elif sample_points >= 60 and blocks >= 3 and hr_coverage >= 0.55:
+            level = "medium"
+    elif sessions >= 18 and (intent not in {"pace_hr_correlation"} or hr_coverage >= 0.7):
         level = "high"
     elif sessions >= 6 and (intent not in {"pace_hr_correlation"} or hr_coverage >= 0.45):
         level = "medium"
@@ -1122,6 +1690,8 @@ def _confidence(coverage: dict[str, Any], intent: str) -> dict[str, Any]:
         notes.append("Weinig sessies in deze periode; interpretatie is voorzichtig.")
     if intent == "pace_hr_correlation" and hr_coverage < 0.7:
         notes.append("Niet elke sessie heeft hartslagdata, dus correlatie is indicatief.")
+    if intent == "hr_response_kinetics" and coverage.get("sample_points", 0) < 60:
+        notes.append("Te weinig ActivityDetails-samples om HR-respons stevig te beoordelen.")
     if coverage.get("distance_coverage", 0) < 0.7:
         notes.append("Afstandsdata ontbreken bij een deel van de sessies.")
     return {
@@ -1138,6 +1708,7 @@ def _follow_up_suggestions(intent: str, request: dict[str, Any]) -> list[str]:
         "compare_periods": ["Waarom is dit veranderd?", "Toon dit per week", "Welke sport verklaart het verschil?"],
         "sport_breakdown": ["Toon alleen hardlopen", "Vergelijk lopen met fietsen", "Welke sport levert meeste load?"],
         "pace_hr_correlation": ["Toon alleen de laatste 90 dagen", "Welke sessies waren efficiënter?", "Vergelijk tempo met vorige maand"],
+        "hr_response_kinetics": ["Welke blokken hadden traag HR-herstel?", "Toon dezelfde analyse met activityDetails", "Vergelijk dit met wandelen"],
         "personal_records": ["Toon top 5 zwaarste sessies", "Welke records bij lopen?", "Vergelijk mijn beste weken"],
         "workout_pattern_analysis": ["Welke workouts doe ik te vaak?", "Maak voorstel volgens dit patroon", "Vergelijk harde sessies per week"],
     }

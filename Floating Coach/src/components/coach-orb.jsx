@@ -217,7 +217,7 @@ function ChatBubble({ m, onNavigateChat, onClose }) {
         padding: '10px 14px',
         borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
         fontSize: 14, lineHeight: 1.5,
-      }} dangerouslySetInnerHTML={{ __html: m.content }} />
+      }} dangerouslySetInnerHTML={{ __html: isUser ? escapeOrbHtml(m.content) : formatOrbCoachContent(m.content) }} />
       {!isUser && analysis && (
         <button type="button"
           onClick={() => {
@@ -257,6 +257,37 @@ function Dot({ delay }) {
     width: 6, height: 6, borderRadius: 999, background: 'var(--ink-4)',
     display: 'inline-block', animation: `thinking-pulse 1s cubic-bezier(.16,1,.3,1) ${delay}s infinite`,
   }}></span>;
+}
+
+function formatOrbCoachContent(content) {
+  const raw = String(content || '');
+  if (!raw.trim()) return '';
+  if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
+    return raw
+      .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+      .replace(/\son\w+=(["']).*?\1/gi, '')
+      .replace(/\shref=(["'])javascript:.*?\1/gi, '')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n{2,}/g, '<br/><br/>')
+      .replace(/\n/g, '<br/>');
+  }
+  return escapeOrbHtml(raw)
+    .replace(/^[-*]\s+(.+)$/gm, '<br/>• $1')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/\n{2,}/g, '<br/><br/>')
+    .replace(/\n/g, '<br/>');
+}
+
+function escapeOrbHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function mockReply(text, score, recoveryData) {

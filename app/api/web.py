@@ -350,12 +350,13 @@ async def web_chat(payload: ChatRequest):
                 payload.message,
                 analysis_request,
             )
+            attach_analysis_card = bool(analysis_request.get("attach_card", True))
             if needs_coach_answer and settings.openai_api_key:
                 analysis_prompt_context = summarize_activity_analysis_for_prompt(analysis_result)
             else:
                 return ChatResponse(
                     reply=build_activity_analysis_reply(analysis_result),
-                    analysis_result=analysis_result,
+                    analysis_result=analysis_result if attach_analysis_card else None,
                 )
     except Exception as exc:
         logger.warning("Structured activity analysis failed, falling back to chat agent: %s", exc)
@@ -485,7 +486,11 @@ async def web_chat(payload: ChatRequest):
             reply=result["output"],
             draft_workout=draft_workout,
             workout_patch=workout_patch,
-            analysis_result=analysis_result,
+            analysis_result=analysis_result if (
+                analysis_result is not None
+                and isinstance(analysis_result.get("context"), dict)
+                and bool(analysis_result["context"].get("attach_card", True))
+            ) else None,
         )
     except Exception as exc:
         if analysis_result is not None:
@@ -495,7 +500,10 @@ async def web_chat(payload: ChatRequest):
                 logger.warning("Chat agent failed after structured analysis, returning deterministic answer: %s", exc)
                 return ChatResponse(
                     reply=build_activity_analysis_reply(analysis_result),
-                    analysis_result=analysis_result,
+                    analysis_result=analysis_result if (
+                        isinstance(analysis_result.get("context"), dict)
+                        and bool(analysis_result["context"].get("attach_card", True))
+                    ) else None,
                 )
             except Exception:
                 pass

@@ -3,7 +3,6 @@
 import { useRef, useState } from "react";
 import { sendChatMessage } from "@/lib/api";
 import { useSessionUserId } from "@/lib/session";
-import ReactMarkdown from "react-markdown";
 import { MessageCircle, X, Send, Bot, User } from "lucide-react";
 
 type UIMessage = {
@@ -146,9 +145,10 @@ export default function CoachChat() {
                     }`}
                   >
                     {message.role === "assistant" ? (
-                      <div className="prose prose-sm prose-slate max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_strong]:text-slate-900 [&_code]:bg-slate-200 [&_code]:px-1 [&_code]:rounded">
-                        <ReactMarkdown>{message.content}</ReactMarkdown>
-                      </div>
+                      <div
+                        className="coach-reply prose prose-sm prose-slate max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_strong]:text-slate-900 [&_code]:rounded [&_code]:bg-slate-200 [&_code]:px-1"
+                        dangerouslySetInnerHTML={{ __html: formatCoachContent(message.content) }}
+                      />
                     ) : (
                       <p className="whitespace-pre-wrap">{message.content}</p>
                     )}
@@ -209,6 +209,81 @@ export default function CoachChat() {
       )}
     </>
   );
+}
+
+function formatCoachContent(content: string): string {
+  const raw = String(content || "");
+  if (!raw.trim()) return "";
+  if (/<\/?[a-z][\s\S]*>/i.test(raw)) {
+    return sanitiseCoachHtml(raw)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  }
+  return markdownToHtml(raw);
+}
+
+function sanitiseCoachHtml(raw: string): string {
+  return String(raw || "")
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
+    .replace(/\son\w+=(["']).*?\1/gi, "")
+    .replace(/\shref=(["'])javascript:.*?\1/gi, "")
+    .replace(/\n{2,}/g, "<br/><br/>")
+    .replace(/\n/g, "<br/>");
+}
+
+function markdownToHtml(raw: string): string {
+  const lines = escapeHtml(raw.trim()).split(/\n/);
+  const html: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  const closeList = () => {
+    if (listType) {
+      html.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      html.push("<br/>");
+      continue;
+    }
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (bullet || numbered) {
+      const nextType = bullet ? "ul" : "ol";
+      if (listType !== nextType) {
+        closeList();
+        html.push(`<${nextType}>`);
+        listType = nextType;
+      }
+      html.push(`<li>${inlineMarkdown((bullet ? bullet[1] : numbered?.[1]) ?? "")}</li>`);
+      continue;
+    }
+    closeList();
+    html.push(`<p>${inlineMarkdown(trimmed)}</p>`);
+  }
+  closeList();
+  return html.join("");
+}
+
+function inlineMarkdown(text: string): string {
+  return String(text || "")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/(^|[\s(])_([^_\n]+)_/g, "$1<em>$2</em>");
+}
+
+function escapeHtml(value: string): string {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function AnalysisPreview({ result }: { result: NonNullable<UIMessage["analysis_result"]> }) {
