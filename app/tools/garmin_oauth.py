@@ -298,6 +298,8 @@ class GarminOAuthService:
         ).first()
         if existing_profile_for_garmin:
             existing_profile_for_garmin.garmin_user_id = None
+            # Release the unique Garmin ID before assigning it to another profile.
+            db.flush()
 
         # Update user profile with Garmin User ID
         user_profile.garmin_user_id = garmin_user_id
