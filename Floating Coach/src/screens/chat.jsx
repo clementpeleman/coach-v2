@@ -71,22 +71,6 @@ function ChatScreen({
     // Live path: call /web/chat if API is online + user is logged in.
     if (online && userId) {
       try {
-        let contextDraft = draftWorkout;
-        if (window.FC_API.adjustTrainingRecommendation && (draftWorkout || window.FC_WORKOUT_PLAN)) {
-          try {
-            const adjusted = await window.FC_API.adjustTrainingRecommendation({
-              userId,
-              recommendation: draftWorkout || window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore, trainingProfile }),
-              instruction: t,
-              trainingProfile,
-            });
-            if (adjusted?.changedByInstruction) {
-              contextDraft = adjusted;
-              draftUpdate = { draft: adjusted, changed: true, summary: adjusted.note };
-              commitDraftWorkout(() => adjusted);
-            }
-          } catch (_) {}
-        }
         const res = await window.FC_API.sendChatMessage({
           userId,
           message: t,
@@ -101,7 +85,7 @@ function ChatScreen({
             },
             training_profile: trainingProfile || null,
             workout_patterns: trainingProfile?.workout_patterns || null,
-            draft_workout: draftUpdate?.draft || contextDraft || null,
+            draft_workout: draftWorkout || null,
             last_analysis_context: lastAnalysisContext,
           },
         });

@@ -189,6 +189,10 @@ def adjust_recommendation(
     if not next_draft:
         next_draft = build_recommendation(user_id=0, recovery=None, training_profile=training_profile, now=now)
 
+    if not is_workout_adjustment_request(text):
+        next_draft["changedByInstruction"] = False
+        return next_draft
+
     changed = False
     rebuild = False
     notes = []
@@ -275,6 +279,58 @@ def adjust_recommendation(
     if changed:
         next_draft["note"] = f"Aangepast door coach: {', '.join(notes)}."
     return next_draft
+
+
+def is_workout_adjustment_request(instruction: str) -> bool:
+    """Return whether chat text explicitly asks to change the current draft."""
+    text = re.sub(r"\s+", " ", (instruction or "").strip().lower())
+    if not text:
+        return False
+
+    # Requests about response style must never leak into workout duration or intensity.
+    if re.search(r"\b(antwoord|uitleg|bericht|tekst|reactie)\b", text):
+        return False
+
+    workout_target = (
+        r"(?:training|workout|trainingsschema|schema|sessie|voorstel|plan|"
+        r"intervallen?|duurloop|looptraining|fietstraining|rit|hem|die|deze|dit)"
+    )
+    adjustment_value = (
+        r"(?:korter|langer|rustiger|makkelijker|harder|zwaarder|intensiever|"
+        r"herstel|duur|drempel|threshold|tempo|vo2(?:max)?|sprints?|"
+        r"wandelen|hardlopen|fietsen|cycling|zwemmen|zwift|"
+        r"\d+(?:[,.]\d+)?\s*(?:u|uur|hours?|min|m|minuten)|"
+        r"\d{1,2}\s*x\s*\d{1,2}\s*(?:min|m|'))"
+    )
+
+    request_with_verb = re.search(
+        rf"\b(?:pas|verander|wijzig|zet|vervang|verkort|verleng|verhoog|verlaag|"
+        rf"schrap|voeg|wissel|maak)\b.*(?:{workout_target}|{adjustment_value})",
+        text,
+    )
+    if request_with_verb:
+        return True
+
+    polite_request = re.search(
+        rf"\b(?:kan|kun|wil|wilt|zou)\s+(?:je|jij|u)\b.*"
+        rf"\b(?:aanpassen|veranderen|wijzigen|maken|zetten|vervangen|verkorten|"
+        rf"verlengen|verhogen|verlagen|doen)\b.*(?:{workout_target}|{adjustment_value})?",
+        text,
+    )
+    if polite_request:
+        return True
+
+    preference_request = re.search(
+        rf"\b(?:doe maar|liever|graag|ik wil|laat het|maak er)\b(?!\s+(?:weten|begrijpen))"
+        rf".*{adjustment_value}",
+        text,
+    )
+    if preference_request:
+        return True
+
+    # Short follow-up answers are common after the coach offers alternatives.
+    shorthand = rf"^(?:toch |dan |liever )?{adjustment_value}(?: graag)?[.!]?$"
+    return bool(re.fullmatch(shorthand, text))
 
 
 def build_structure(

@@ -59,13 +59,18 @@ class UploadWorkoutToGarminArgs(BaseModel):
     schedule_date: Optional[str] = Field(default=None, description="Optional date to schedule workout (YYYY-MM-DD format)")
     force_create: bool = Field(default=False, description="Set to True to bypass recovery checks. Use when user explicitly requests 'force' or for testing purposes.")
 
-def create_conversational_agent(user_id: int, current_date: str = None):
+def create_conversational_agent(
+    user_id: int,
+    current_date: str = None,
+    allow_side_effects: bool = True,
+):
     """
     Creates a conversational agent for a user.
 
     Args:
         user_id: The Telegram user ID
         current_date: Current date in ISO format (YYYY-MM-DD). If None, will be fetched automatically.
+        allow_side_effects: Whether tools that persist, create, delete, or upload data are available.
     """
     if current_date is None:
         current_date = get_current_date_tool()
@@ -149,11 +154,6 @@ def create_conversational_agent(user_id: int, current_date: str = None):
 
     tools = [
         StructuredTool.from_function(
-            name="get_current_date",
-            func=get_current_date_tool,
-            description="Returns the current date in ISO format (YYYY-MM-DD).",
-        ),
-        StructuredTool.from_function(
             name="get_health_data",
             func=get_health_data_for_user,
             description="""Fetch health and activity data from Garmin. This unified tool can fetch multiple data types at once.
@@ -184,6 +184,9 @@ def create_conversational_agent(user_id: int, current_date: str = None):
             name="create_fit_file",
             func=create_fit_file_for_user,
             description="""Creëert een .fit workout bestand DYNAMISCH op basis van type, duur en sport.
+
+            Gebruik deze tool ALLEEN wanneer de gebruiker expliciet vraagt om een workout aan te maken.
+            Een vraag over, vergelijking met of vermelding van een workout is geen toestemming om iets te creëren.
 
             DYNAMISCHE GENERATIE:
             - Geef workout_type, duration_minutes en optioneel sport op
@@ -280,7 +283,8 @@ def create_conversational_agent(user_id: int, current_date: str = None):
 
             BELANGRIJK:
             - FTP is nodig voor power-based cycling workouts
-            - Als gebruiker FTP noemt, sla het op met deze tool
+            - Sla alleen op na een expliciet verzoek om de voorkeur te bewaren, of als onderdeel van een expliciet gevraagde workout
+            - Een losse vermelding of vraag over FTP is geen toestemming om iets op te slaan
             - FTP wordt automatisch gebruikt voor alle cycling workouts
 
             Deze preferences worden gebruikt bij workout aanbevelingen.
@@ -315,7 +319,7 @@ def create_conversational_agent(user_id: int, current_date: str = None):
         StructuredTool.from_function(
             name="delete_user_data",
             func=delete_user_data_for_user,
-            description="Deletes all data associated with the user.",
+            description="Deletes all data associated with the user. Use only after an explicit deletion request and confirmation.",
         ),
         StructuredTool.from_function(
             name="upload_workout_to_garmin",
@@ -372,6 +376,22 @@ def create_conversational_agent(user_id: int, current_date: str = None):
         ),
     ]
 
+    if not allow_side_effects:
+        mutating_tools = {
+            "create_fit_file",
+            "save_workout_preferences",
+            "delete_user_data",
+            "upload_workout_to_garmin",
+        }
+        tools = [tool for tool in tools if tool.name not in mutating_tools]
+
+    current_year = current_date[:4]
+    side_effect_mode = (
+        "Actietools zijn beschikbaar, maar alleen na een expliciet verzoek van de gebruiker."
+        if allow_side_effects
+        else "Deze webchat is read-only: workoutwijzigingen worden buiten de agent verwerkt en actietools zijn niet beschikbaar."
+    )
+
     llm = ChatOpenAI(temperature=0, model="gpt-4o-mini")
 
     prompt = ChatPromptTemplate.from_messages(
@@ -397,17 +417,24 @@ OPMAAKREGELS VOOR TELEGRAM:
 - Escape speciale HTML karakters: & wordt &amp;, < wordt &lt;, > wordt &gt;
 
 BELANGRIJKE DATUM CONTEXT:
-- De huidige datum kan worden opgehaald met de get_current_date tool
-- Wanneer gebruikers datums noemen zonder jaar (bijv. "8 oktober", "October 8"), ga ALTIJD uit van het HUIDIGE jaar (2025)
-- Gebruik get_current_date eerst om de huidige datum en jaar te bepalen
-- Voor queries zoals "8 oktober" → gebruik "2025-10-08"
-- Voor queries zoals "1 tot 13 oktober" → gebruik "2025-10-01" tot "2025-10-13"
+- De datum bovenaan is de gezaghebbende huidige datum; je hoeft daarvoor geen tool aan te roepen
+- Wanneer gebruikers datums noemen zonder jaar (bijv. "8 oktober"), ga uit van het huidige jaar ({current_year})
+- Voor queries zoals "8 oktober" → gebruik "{current_year}-10-08"
+- Voor queries zoals "1 tot 13 oktober" → gebruik "{current_year}-10-01" tot "{current_year}-10-13"
+
+ACTIE- EN CONSENTREGELS:
+- {side_effect_mode}
+- Behandel uitlegvragen, analyses, vergelijkingen en vragen over een huidig workoutvoorstel altijd als read-only
+- Het noemen van een sport, workouttype, tijdsduur, interval of FTP is op zichzelf nooit toestemming om iets te wijzigen of op te slaan
+- Wijzig, creëer, upload, verwijder of bewaar alleen wanneer de gebruiker dat in het huidige bericht expliciet vraagt
+- Voer een expliciete actie maximaal één keer uit
+- Bij twijfel: geef informatie en stel zo nodig één korte verduidelijkingsvraag; onderneem geen actie
 
 Belangrijke richtlijnen:
 - Alle tools retourneren vooraf opgemaakte, leesbare samenvattingen (geen ruwe JSON)
 - De data die je ontvangt is al gefilterd en compact
 - Je kunt deze data direct gebruiken in je antwoorden
-- Gebruik de get_current_date tool wanneer gebruikers vragen om data "tot vandaag" of "deze week"
+- Gebruik de huidige datum bovenaan wanneer gebruikers vragen om data "tot vandaag" of "deze week"
 - Als de gebruikersinput een blok "CONTEXT VOOR COACH" bevat met weer/locatie, gebruik dat in je trainingsadvies.
 - Noem weer alleen wanneer het de training beïnvloedt: hitte, kou, wind, regen/onweer, zichtbaarheid of hydratatie.
 - Pas tempo/intensiteit/routeadvies aan bij slecht weer en leg kort uit waarom.
@@ -433,6 +460,7 @@ KRITISCHE WORKFLOW VOOR TRAINING CREATIE:
    - Leg de aanbeveling uit aan de gebruiker
 
 2. Wanneer gebruiker vraagt om specifieke workout te maken:
+   - Controleer eerst of dit een expliciet creatieverzoek is; vragen over een workout zijn geen creatieverzoek
    - Roep EERST assess_recovery_status aan
    - Controleer of gevraagde intensiteit past bij herstel
    - Als herstelstatus NIET optimaal is en gebruiker vraagt intensieve workout (THRESHOLD, VO2MAX, SPRINT):
@@ -444,7 +472,7 @@ KRITISCHE WORKFLOW VOOR TRAINING CREATIE:
    - STOP HIER en wacht op gebruikers keuze (maak GEEN workout zonder toestemming)
 
 3. Voor INTERVAL workouts (THRESHOLD, VO2MAX, SPRINT) op de fiets:
-   - Als gebruiker FTP noemt in bericht (bijv "FTP is 250" of "wattage, ftp 170"):
+   - Als gebruiker expliciet een workout vraagt en daarbij FTP noemt (bijv "Maak een workout op wattage, mijn FTP is 250"):
      * Sla FTP EERST op met save_workout_preferences (ftp parameter)
      * Gebruik dan automatisch power targets bij workout creatie
      * Geef FTP mee aan create_fit_file

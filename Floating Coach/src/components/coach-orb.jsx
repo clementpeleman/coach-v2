@@ -41,21 +41,6 @@ function CoachOrb({
 
     if (online && userId) {
       try {
-        let contextDraft = draftWorkout;
-        if (window.FC_API.adjustTrainingRecommendation && (draftWorkout || window.FC_WORKOUT_PLAN)) {
-          try {
-            const adjusted = await window.FC_API.adjustTrainingRecommendation({
-              userId,
-              recommendation: draftWorkout || window.FC_WORKOUT_PLAN?.buildDraft({ recoveryScore, trainingProfile }),
-              instruction: text,
-              trainingProfile,
-            });
-            if (adjusted?.changedByInstruction) {
-              contextDraft = adjusted;
-              setDraftWorkout?.(() => adjusted);
-            }
-          } catch (_) {}
-        }
         const res = await window.FC_API.sendChatMessage({
           userId, message: text,
           history: messages.map((m) => ({ role: m.role, content: m.content })),
@@ -68,7 +53,7 @@ function CoachOrb({
             },
             training_profile: trainingProfile || null,
             workout_patterns: trainingProfile?.workout_patterns || null,
-            draft_workout: contextDraft || null,
+            draft_workout: draftWorkout || null,
             last_analysis_context: lastAnalysisContext,
           },
         });

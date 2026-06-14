@@ -385,7 +385,9 @@ async def web_chat(payload: ChatRequest):
                 chat_history.append(HumanMessage(content=item.content))
 
         agent_executor = create_conversational_agent(
-            user_id=payload.user_id, current_date=date.today().isoformat()
+            user_id=payload.user_id,
+            current_date=date.today().isoformat(),
+            allow_side_effects=False,
         )
         message = payload.message
         draft_workout = None
@@ -400,6 +402,7 @@ async def web_chat(payload: ChatRequest):
             current_draft = payload.context.get("draft_workout") if isinstance(payload.context, dict) else None
             training_profile = payload.context.get("training_profile") if isinstance(payload.context, dict) else None
             if isinstance(current_draft, dict):
+                effective_draft = current_draft
                 try:
                     from app.tools.training_recommendation_engine import adjust_recommendation
 
@@ -409,6 +412,7 @@ async def web_chat(payload: ChatRequest):
                         training_profile=training_profile if isinstance(training_profile, dict) else None,
                     )
                     if adjusted.get("changedByInstruction"):
+                        effective_draft = adjusted
                         draft_workout = adjusted
                         workout_patch = {
                             "type": adjusted.get("type"),
@@ -418,12 +422,19 @@ async def web_chat(payload: ChatRequest):
                             "targetMode": adjusted.get("targetMode"),
                         }
                         context_lines.append(
-                            "Workoutvoorstel is alvast structured aangepast op basis van de gebruikersvraag. "
+                            "Het workoutvoorstel is expliciet aangepast op verzoek van de gebruiker. "
                             f"Nieuw voorstel: {adjusted.get('type')} {adjusted.get('sportType')} "
                             f"{adjusted.get('durationMin')} min, intensiteit {adjusted.get('intensityPct')}%."
                         )
                 except Exception as exc:
                     logger.warning("Structured workout adjustment failed: %s", exc)
+                context_lines.append(
+                    "Huidig workoutvoorstel als read-only context: "
+                    f"{effective_draft.get('type')} {effective_draft.get('sportType')} "
+                    f"{effective_draft.get('durationMin')} min, intensiteit "
+                    f"{effective_draft.get('intensityPct')}%. "
+                    "Beantwoord vragen hierover zonder het voorstel verder te wijzigen."
+                )
             recovery = payload.context.get("recovery") if isinstance(payload.context, dict) else None
             if recovery:
                 metrics = recovery.get("metrics") if isinstance(recovery.get("metrics"), dict) else {}

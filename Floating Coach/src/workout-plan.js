@@ -66,6 +66,9 @@
   function updateDraftFromText(draft, text, context = {}) {
     const current = draft || buildDraft(context);
     const lower = String(text || '').toLowerCase();
+    if (!isWorkoutAdjustmentRequest(lower)) {
+      return { draft: current, changed: false, summary: null };
+    }
     const next = { ...current, source: 'coach', status: 'draft' };
     let rebuild = false;
     let changed = false;
@@ -146,6 +149,25 @@
     next.updatedAt = new Date().toISOString();
     next.note = notes.length ? `Aangepast door coach: ${notes.join(', ')}.` : current.note;
     return { draft: next, changed: true, summary: next.note };
+  }
+
+  function isWorkoutAdjustmentRequest(text) {
+    const lower = String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!lower) return false;
+    if (/\b(antwoord|uitleg|bericht|tekst|reactie)\b/.test(lower)) return false;
+
+    const targetOrValue = /\b(training|workout|trainingsschema|schema|sessie|voorstel|plan|intervallen?|duurloop|looptraining|fietstraining|rit|hem|die|deze|dit|korter|langer|rustiger|makkelijker|harder|zwaarder|intensiever|herstel|duur|drempel|threshold|tempo|vo2(?:max)?|sprints?|wandelen|hardlopen|fietsen|cycling|zwemmen|zwift)\b|\b\d+(?:[,.]\d+)?\s*(u|uur|hours?|min|m|minuten)\b|\b\d{1,2}\s*x\s*\d{1,2}\s*(min|m|')\b/;
+    const directVerb = /\b(pas|verander|wijzig|zet|vervang|verkort|verleng|verhoog|verlaag|schrap|voeg|wissel|maak)\b/;
+    if (directVerb.test(lower) && targetOrValue.test(lower)) return true;
+
+    const politeLead = /\b(kan|kun|wil|wilt|zou)\s+(je|jij|u)\b/;
+    const politeAction = /\b(aanpassen|veranderen|wijzigen|maken|zetten|vervangen|verkorten|verlengen|verhogen|verlagen|doen)\b/;
+    if (politeLead.test(lower) && politeAction.test(lower) && targetOrValue.test(lower)) return true;
+
+    const preference = /\b(doe maar|liever|graag|ik wil|laat het|maak er)\b(?!\s+(weten|begrijpen))/;
+    if (preference.test(lower) && targetOrValue.test(lower)) return true;
+
+    return /^(?:(toch|dan|liever)\s+)?(korter|langer|rustiger|makkelijker|harder|zwaarder|intensiever|herstel|duur|drempel|threshold|tempo|vo2(?:max)?|sprints?|wandelen|hardlopen|fietsen|cycling|zwemmen|zwift|\d+(?:[,.]\d+)?\s*(u|uur|hours?|min|m|minuten))(?:\s+graag)?[.!]?$/.test(lower);
   }
 
   function approveDraft(draft) {
@@ -551,6 +573,7 @@
     SPORT_DURATION_MINUTES,
     buildDraft,
     updateDraftFromText,
+    isWorkoutAdjustmentRequest,
     approveDraft,
     buildStructure,
     fitBlocksToDuration,
